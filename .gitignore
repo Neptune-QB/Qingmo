@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Android
+android/.gradle/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab
+*.keystore
+!android/app/release.keystore
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Environment
+.env
+.env.local
+*.log
+
+# Database
+*.db-journal
+*.db-wal
+
+# Crawler data (二进制/视频文件过大，不进入版本控制)
+backend/crawler/data/videos/
+backend/crawler/data/browser_data/
+*.db
+
+# Qwen
+.qwen/
