@@ -78,50 +78,52 @@ def seed():
     init_db()
     dramas = load_dramas()
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    # Clear existing data
-    cursor.execute("DELETE FROM highlights")
-    cursor.execute("DELETE FROM episodes")
-    cursor.execute("DELETE FROM drama_tags")
-    cursor.execute("DELETE FROM dramas")
+        # Clear existing data
+        cursor.execute("DELETE FROM highlights")
+        cursor.execute("DELETE FROM episodes")
+        cursor.execute("DELETE FROM drama_tags")
+        cursor.execute("DELETE FROM dramas")
 
-    for i, drama in enumerate(dramas):
-        title = drama["name"]
-        author = drama["author"]
-        description = drama["description"]
-        cover_url = drama["cover_url"]
-        tags = drama.get("tags", [])
-        episode_count = drama.get("episodes", 50)
-        chapter_titles = drama.get("chapter_titles", [])
+        for i, drama in enumerate(dramas):
+            title = drama["name"]
+            author = drama["author"]
+            description = drama["description"]
+            cover_url = drama["cover_url"]
+            tags = drama.get("tags", [])
+            episode_count = drama.get("episodes", 50)
+            chapter_titles = drama.get("chapter_titles", [])
 
-        cursor.execute(
-            "INSERT INTO dramas (id, title, author, description, cover_url, category, total_episodes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (i + 1, title, author, description, cover_url, tags[0] if tags else "", episode_count),
-        )
-        for tag in tags[:5]:
-            cursor.execute("INSERT INTO drama_tags (drama_id, tag) VALUES (?, ?)", (i + 1, tag))
-
-        for ep_num in range(1, episode_count + 1):
-            ep_id = i * 1000 + ep_num
-            ep_title = chapter_titles[ep_num - 1] if ep_num - 1 < len(chapter_titles) else f"\u7B2C{ep_num}\u96C6"
             cursor.execute(
-                "INSERT INTO episodes (episode_id, drama_id, episode_num, title, duration, video_url, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (ep_id, i + 1, ep_num, ep_title, 300, "videos/placeholder.mp4", ""),
+                "INSERT INTO dramas (id, title, author, description, cover_url, category, total_episodes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (i + 1, title, author, description, cover_url, tags[0] if tags else "", episode_count),
             )
-            num_h = random.randint(1, 3)
-            for _ in range(num_h):
-                h_type = random.choice(HIGHLIGHT_TYPES)
-                h_time = random.randint(10, 280)
-                widget = "branch" if h_type == "branch" else "emoji"
-                cursor.execute(
-                    "INSERT INTO highlights (episode_id, time, type, title, widget_type) VALUES (?, ?, ?, ?, ?)",
-                    (ep_id, h_time, h_type, HIGHLIGHT_TITLES[h_type], widget),
-                )
+            for tag in tags[:5]:
+                cursor.execute("INSERT INTO drama_tags (drama_id, tag) VALUES (?, ?)", (i + 1, tag))
 
-    conn.commit()
-    conn.close()
-    print(f"Seed complete: {len(dramas)} dramas, ~{sum(d.get('episodes', 50) for d in dramas)} episodes inserted.")
+            for ep_num in range(1, episode_count + 1):
+                ep_id = i * 1000 + ep_num
+                ep_title = chapter_titles[ep_num - 1] if ep_num - 1 < len(chapter_titles) else f"\u7B2C{ep_num}\u96C6"
+                cursor.execute(
+                    "INSERT INTO episodes (episode_id, drama_id, episode_num, title, duration, video_url, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (ep_id, i + 1, ep_num, ep_title, 300, "videos/placeholder.mp4", ""),
+                )
+                num_h = random.randint(1, 3)
+                for _ in range(num_h):
+                    h_type = random.choice(HIGHLIGHT_TYPES)
+                    h_time = random.randint(10, 280)
+                    widget = "branch" if h_type == "branch" else "emoji"
+                    cursor.execute(
+                        "INSERT INTO highlights (episode_id, time, type, title, widget_type) VALUES (?, ?, ?, ?, ?)",
+                        (ep_id, h_time, h_type, HIGHLIGHT_TITLES[h_type], widget),
+                    )
+
+        conn.commit()
+        print(f"Seed complete: {len(dramas)} dramas, ~{sum(d.get('episodes', 50) for d in dramas)} episodes inserted.")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

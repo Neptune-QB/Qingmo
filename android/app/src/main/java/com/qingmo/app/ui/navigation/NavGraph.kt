@@ -77,7 +77,11 @@ fun NavGraph() {
                     }
                 },
                 onCurrentEpisodeChanged = { currentEpisodeId.value = it },
-                onGoDetail = { navController.navigate(Routes.detail(dramaId)) },
+                onGoDetail = {
+                    navController.navigate(Routes.detail(dramaId)) {
+                        popUpTo(Routes.LIST) { inclusive = false }
+                    }
+                },
             )
         }
     }

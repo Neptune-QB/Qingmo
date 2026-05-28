@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,7 @@ import com.qingmo.app.ui.theme.OnSurfaceVariant
 import com.qingmo.app.ui.theme.Primary
 import com.qingmo.app.ui.theme.SurfaceElevated
 import com.qingmo.app.ui.theme.SurfaceVariant
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Suppress("ktlint:standard:function-naming")
@@ -67,9 +69,15 @@ fun DramaDetailScreen(
     val repository = remember { DramaRepository() }
     var drama by remember { mutableStateOf<DramaDetail?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(dramaId) {
-        repository.getDramaDetail(dramaId).onSuccess { drama = it }
+        isLoading = true
+        error = null
+        repository.getDramaDetail(dramaId)
+            .onSuccess { drama = it }
+            .onFailure { error = it.message ?: "\u52A0\u8F7D\u5931\u8D25" }
         isLoading = false
     }
 
@@ -86,7 +94,7 @@ fun DramaDetailScreen(
                 },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
-                        Text("← 返回", color = Primary)
+                        Text("\u2190 \u8FD4\u56DE", color = Primary)
                     }
                 },
                 colors =
@@ -103,7 +111,31 @@ fun DramaDetailScreen(
                 Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("加载中…", color = OnSurfaceVariant)
+                Text("\u52A0\u8F7D\u4E2D\u2026", color = OnSurfaceVariant)
+            }
+            return@Scaffold
+        }
+
+        if (error != null && drama == null) {
+            Column(
+                Modifier.fillMaxSize().padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(error!!, color = OnSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                TextButton(onClick = {
+                    isLoading = true
+                    error = null
+                    scope.launch {
+                        repository.getDramaDetail(dramaId)
+                            .onSuccess { drama = it }
+                            .onFailure { error = it.message ?: "\u52A0\u8F7D\u5931\u8D25" }
+                        isLoading = false
+                    }
+                }) {
+                    Text("\u91CD\u8BD5", color = Primary)
+                }
             }
             return@Scaffold
         }

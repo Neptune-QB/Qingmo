@@ -66,6 +66,7 @@ import com.qingmo.app.data.repository.DramaRepository
 import com.qingmo.app.ui.theme.PlayerAccent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -93,7 +94,8 @@ fun DramaPagerScreen(
     var detail by remember { mutableStateOf<DramaDetail?>(null) }
     var err by remember { mutableStateOf<String?>(null) }
     var allDramas by remember { mutableStateOf<List<DramaBrief>>(emptyList()) }
-    LaunchedEffect(dramaId) { repo.getDramaDetail(dramaId).onSuccess { detail = it }.onFailure { err = it.message } }
+    var retryTrigger by remember { mutableStateOf(0) }
+    LaunchedEffect(dramaId, retryTrigger) { repo.getDramaDetail(dramaId).onSuccess { detail = it }.onFailure { err = it.message } }
     LaunchedEffect(Unit) { repo.getDramas().onSuccess { allDramas = it } }
     val resolved =
         remember(episodeId, detail) {
@@ -107,7 +109,7 @@ fun DramaPagerScreen(
         }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         when {
-            err != null -> Err(err!!)
+            err != null -> Err(err!!, onRetry = { retryTrigger++ })
             detail == null -> Load()
             detail!!.episodes.isEmpty() -> Err("\u6682\u65E0\u5267\u96C6\u6570\u636E")
             else -> Pager(detail!!, resolved, allDramas, repo, onBack, onNextDrama, onCurrentEpisodeChanged, onGoDetail)
@@ -303,6 +305,7 @@ private class NativeAdapter(
     var activePlayer: ExoPlayer? = null
     var viewPager2: ViewPager2? = null // Reference for touch disallow during seekbar drag
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val progressJobs = mutableMapOf<Int, Job>()
     private val d = dm.density
 
     private fun dp(v: Float) = (v * d + 0.5f).toInt()
@@ -582,22 +585,24 @@ private class NativeAdapter(
                 }
             }
         h.pv.player = player
-        scope.launch {
-            var last = 0L
-            while (true) {
-                if (player.isPlaying) {
-                    val p = player.currentPosition
-                    if (p -
-                        last >=
-                        2000
-                    ) {
-                        ProgressCache.save(ep.episodeId, p)
-                        last = p
+        progressJobs[pos]?.cancel()
+        progressJobs[pos] =
+            scope.launch {
+                var last = 0L
+                while (true) {
+                    if (player.isPlaying) {
+                        val p = player.currentPosition
+                        if (p -
+                            last >=
+                            2000
+                        ) {
+                            ProgressCache.save(ep.episodeId, p)
+                            last = p
+                        }
                     }
+                    delay(200)
                 }
-                delay(200)
             }
-        }
         val savedMs = ProgressCache.get(ep.episodeId)
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
@@ -620,6 +625,20 @@ private class NativeAdapter(
                 viewPager2?.requestDisallowInterceptTouchEvent(dragging)
             }
         if (pos == cur) applyFullscreenToActiveVh()
+    }
+
+    override fun onViewRecycled(holder: VH) {
+        super.onViewRecycled(holder)
+        val pos = holder.absoluteAdapterPosition
+        if (pos != RecyclerView.NO_POSITION) {
+            progressJobs[pos]?.cancel()
+            progressJobs.remove(pos)
+            // Release ExoPlayer if far from current position (keep cur-1..cur+1)
+            if (abs(pos - cur) > 2) {
+                players[pos]?.release()
+                players.remove(pos)
+            }
+        }
     }
 
     private fun updateDanmaku(btn: TextView) {
@@ -723,6 +742,8 @@ private class NativeAdapter(
     }
 
     fun releaseAll() {
+        progressJobs.values.forEach { it.cancel() }
+        progressJobs.clear()
         players.values.forEach { it.release() }
         players.clear()
     }
@@ -912,7 +933,7 @@ private fun ESheet(
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(0.6f),
             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-            color = Color(0xFFF7F3EC),
+            color = Background,
         ) {
             Column(Modifier.padding(20.dp)) {
                 Row(
@@ -922,16 +943,13 @@ private fun ESheet(
                 ) {
                     Text(
                         "\u9009\u96C6\uFF08\u5171${total}\u96C6\uFF09",
-                        color = Color(0xFF2C2C2C),
+                        color = OnBackground,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         "\u2192 \u8FD4\u56DE\u64AD\u653E",
-                        color =
-                            Color(
-                                0xFF5B8C85,
-                            ),
+                        color = Primary,
                         fontSize = 14.sp,
                         modifier =
                             Modifier.clickable {
@@ -951,24 +969,24 @@ private fun ESheet(
                                 val watched = ProgressCache.isWatched(ep.episodeId)
                                 val bgColor =
                                     when {
-                                        cur -> Color(0xFF5B8C85).copy(alpha = 0.12f)
-                                        watched -> Color(0xFFD5CFC0).copy(alpha = 0.3f)
+                                        cur -> Primary.copy(alpha = 0.12f)
+                                        watched -> SurfaceVariant.copy(alpha = 0.5f)
                                         else -> Color.White
                                     }
                                 val textColor =
                                     when {
-                                        cur -> Color(0xFF5B8C85)
-                                        watched -> Color(0xFF7A7A7A)
-                                        else -> Color(0xFF3D3D3D)
+                                        cur -> Primary
+                                        watched -> OnSurfaceVariant
+                                        else -> OnSurface
                                     }
                                 val border =
                                     if (cur) {
                                         BorderStroke(
                                             1.dp,
-                                            Color(0xFF5B8C85),
+                                            Primary,
                                         )
                                     } else {
-                                        BorderStroke(0.5.dp, Color(0xFFD5CFC0))
+                                        BorderStroke(0.5.dp, Border)
                                     }
                                 Surface(
                                     Modifier.weight(1f).aspectRatio(1f).clickable {
@@ -1042,7 +1060,20 @@ private fun Load() =
 
 @Suppress("ktlint:standard:function-naming")
 @Composable
-private fun Err(msg: String) =
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+private fun Err(
+    msg: String,
+    onRetry: (() -> Unit)? = null,
+) =
+    Column(
+        Modifier.fillMaxSize().background(Color.Black),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
         Text(msg, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp)
+        if (onRetry != null) {
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onRetry) {
+                Text("\u91CD\u8BD5", color = PlayerAccent, fontSize = 15.sp)
+            }
+        }
     }

@@ -1,8 +1,10 @@
 package com.qingmo.app.data
 
+import java.util.concurrent.ConcurrentHashMap
+
 object ProgressCache {
-    private val cache = mutableMapOf<Long, Long>()
-    private val watched = mutableSetOf<Long>()
+    private val cache = ConcurrentHashMap<Long, Long>()
+    private val watched = ConcurrentHashMap.newKeySet<Long>()
 
     fun get(episodeId: Long): Long = cache[episodeId] ?: 0L
 

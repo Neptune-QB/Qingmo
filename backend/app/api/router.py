@@ -20,13 +20,17 @@ def get_dramas():
     cursor = conn.cursor()
     cursor.execute("SELECT id, title, cover_url, total_episodes FROM dramas")
     rows = cursor.fetchall()
+
+    cursor.execute("SELECT drama_id, tag FROM drama_tags ORDER BY drama_id")
+    tag_map: dict[int, list[str]] = {}
+    for row in cursor.fetchall():
+        tag_map.setdefault(row["drama_id"], []).append(row["tag"])
+
     result = []
     for r in rows:
-        cursor.execute("SELECT tag FROM drama_tags WHERE drama_id = ?", (r["id"],))
-        tags = [t["tag"] for t in cursor.fetchall()]
         result.append(DramaBrief(
             id=r["id"], title=r["title"], cover_url=r["cover_url"],
-            tags=tags, total_episodes=r["total_episodes"],
+            tags=tag_map.get(r["id"], []), total_episodes=r["total_episodes"],
         ))
     conn.close()
     return result

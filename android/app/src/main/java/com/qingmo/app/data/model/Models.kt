@@ -1,7 +1,9 @@
 package com.qingmo.app.data.model
 
+import androidx.compose.runtime.Immutable
 import com.google.gson.annotations.SerializedName
 
+@Immutable
 data class DramaBrief(
     val id: Int,
     val title: String,
@@ -10,6 +12,7 @@ data class DramaBrief(
     @SerializedName("totalEpisodes") val episodeCount: Int = 0,
 )
 
+@Immutable
 data class EpisodeBrief(
     val episodeId: Long,
     val episodeNum: Int,
@@ -18,6 +21,7 @@ data class EpisodeBrief(
     val thumbnailUrl: String? = null,
 )
 
+@Immutable
 data class DramaDetail(
     val id: Int,
     val title: String,
@@ -28,6 +32,7 @@ data class DramaDetail(
     val episodes: List<EpisodeBrief>,
 )
 
+@Immutable
 data class HighlightItem(
     val id: Int,
     val episodeId: Long,
@@ -38,6 +43,7 @@ data class HighlightItem(
     val options: List<String>? = null,
 )
 
+@Immutable
 data class PlaybackInfo(
     val episodeId: Long,
     val videoUrl: String,
@@ -45,6 +51,7 @@ data class PlaybackInfo(
     val highlights: List<HighlightItem> = emptyList(),
 )
 
+@Immutable
 data class ProgressReport(
     val episodeId: Long,
     val progress: Int,
