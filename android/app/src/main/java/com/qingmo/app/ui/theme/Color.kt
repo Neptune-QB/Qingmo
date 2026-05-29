@@ -44,7 +44,7 @@ val Warning = Color(0xFFB89B5C)
 
 // --- 播放器强调色 ---
 val PlayerAccent = Color(0xFFE11D48)
-val PlayerBg = Color(0xFF0A0A0B)
+val PlayerBg = Background
 
 // --- 标签色 ---
 val ConflictColor = Color(0xFFB85C5C)

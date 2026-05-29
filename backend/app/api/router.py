@@ -1,17 +1,117 @@
-from fastapi import APIRouter, HTTPException, Query
+import json
+
+from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
 from app.database import get_connection
 from app.config import settings
 from app.schemas import (
     DramaBrief, DramaDetail, EpisodeBrief,
     PlaybackInfo, HighlightItem, HealthResponse,
 )
+from app.services.llm_service import llm_service
 
 router = APIRouter()
 
 
+# ===== Pydantic 请求模型 =====
+class AgentChatRequest(BaseModel):
+    user_id: str = Field(..., description="设备/用户唯一标识")
+    message: str = Field(..., description="用户输入消息")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="当前观剧上下文")
+    history: Optional[List[Dict[str, str]]] = Field(default=None, description="历史对话")
+
+
+class StoryExtensionRequest(BaseModel):
+    drama_title: str
+    drama_desc: str
+    latest_episodes: List[str]
+    user_preferences: Optional[List[str]] = None
+
+
+class GenerateHighlightsRequest(BaseModel):
+    drama_title: str
+    episode_transcript: str
+    episode_duration: float
+
+
+# ===== 原有接口 =====
 @router.get("/health", response_model=HealthResponse)
 def health():
-    return {"status": "ok", "service": settings.APP_NAME}
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "llm_available": llm_service.is_available
+    }
+
+
+# ===== Agent 新增接口 =====
+@router.post("/agent/chat")
+async def agent_chat(req: AgentChatRequest):
+    """小墨 Agent 对话接口，流式返回"""
+    # 清洗用户输入，防止 Prompt 注入
+    safe_message = req.message.replace("\n", "\\n")
+    safe_context = dict(req.context) if req.context else None
+
+    async def generator():
+        async for chunk in llm_service.chat(
+            user_message=safe_message,
+            history=req.history,
+            drama_context=safe_context
+        ):
+            yield chunk.encode("utf-8")
+
+    return StreamingResponse(generator(), media_type="text/plain")
+
+
+@router.post("/agent/story-extension")
+async def story_extension(req: StoryExtensionRequest):
+    """AI 剧情续写接口"""
+    result = await llm_service.story_extension(
+        drama_title=req.drama_title,
+        drama_desc=req.drama_desc,
+        latest_episodes=req.latest_episodes,
+        user_preferences=req.user_preferences
+    )
+    return {"extension": result}
+
+
+@router.post("/agent/generate-highlights")
+async def generate_highlights(req: GenerateHighlightsRequest):
+    """Doubao 自动智能生成高光点"""
+    highlights = await llm_service.generate_highlights(
+        drama_title=req.drama_title,
+        episode_transcript=req.episode_transcript,
+        episode_duration=req.episode_duration
+    )
+    return {"highlights": highlights}
+
+
+@router.post("/interactions")
+def report_interaction(
+    user_id: str = Body(...),
+    episode_id: int = Body(...),
+    highlight_id: Optional[int] = Body(None),
+    module_id: str = Body(...),
+    interaction_data: Dict[str, Any] = Body(default_factory=dict)
+):
+    """上报用户互动数据"""
+    # 限制单次上报数据大小
+    if len(json.dumps(interaction_data, ensure_ascii=False)) > 4096:
+        raise HTTPException(status_code=413, detail="互动数据过大，请精简至 4KB 以内")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO user_interactions
+           (user_id, episode_id, highlight_id, module_id, interaction_data)
+           VALUES (?, ?, ?, ?, ?)""",
+        (user_id, episode_id, highlight_id, module_id, json.dumps(interaction_data))
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return {"ok": True, "interaction_id": new_id}
 
 
 @router.get("/dramas", response_model=list[DramaBrief])

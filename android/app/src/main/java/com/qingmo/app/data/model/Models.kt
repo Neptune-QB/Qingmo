@@ -36,10 +36,10 @@ data class DramaDetail(
 data class HighlightItem(
     val id: Int,
     val episodeId: Long,
-    val time: Int,
+    val time: Float,
     val type: String,
     val title: String,
-    @SerializedName("widget_type") val widgetType: String = "emoji",
+    @SerializedName("widget_type") val widgetType: String = "emotion",
     val options: List<String>? = null,
 )
 

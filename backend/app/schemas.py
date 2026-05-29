@@ -31,7 +31,7 @@ class DramaDetail(BaseModel):
 class HighlightItem(BaseModel):
     id: int
     episode_id: int
-    time: int
+    time: float
     type: str
     title: str
     widget_type: str = "emoji"
@@ -53,3 +53,4 @@ class ProgressReport(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+    llm_available: bool = False

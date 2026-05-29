@@ -11,6 +11,8 @@ trim_trailing_whitespace = true
 [*.{kt,kts}]
 indent_size = 4
 max_line_length = 120
+# animateFloat 是扩展函数需显式导入，ktlint 会误删
+ktlint_disabled_rules = no-unused-imports
 
 [*.{xml,json}]
 indent_size = 4

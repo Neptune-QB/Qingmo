@@ -1,5 +1,9 @@
 package com.qingmo.app.ui.navigation
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,7 +36,11 @@ fun NavGraph() {
     val currentEpisodeId = rememberSaveable { mutableStateOf(-1L) }
 
     NavHost(navController = navController, startDestination = Routes.LIST) {
-        composable(Routes.LIST) {
+        composable(
+            Routes.LIST,
+            enterTransition = { fadeIn(tween(200)) },
+            popEnterTransition = { fadeIn(tween(200)) },
+        ) {
             DramaListScreen(onDramaClick = { id ->
                 navController.navigate(Routes.player(id, -1L)) {
                     popUpTo(Routes.LIST) { inclusive = false }
@@ -43,6 +51,18 @@ fun NavGraph() {
         composable(
             route = Routes.DETAIL,
             arguments = listOf(navArgument("dramaId") { type = NavType.IntType }),
+            enterTransition = {
+                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300))
+            },
+            exitTransition = {
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300))
+            },
+            popEnterTransition = {
+                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300))
+            },
+            popExitTransition = {
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300))
+            },
         ) { backStackEntry ->
             val dramaId = backStackEntry.arguments?.getInt("dramaId") ?: return@composable
             DramaDetailScreen(
@@ -64,6 +84,22 @@ fun NavGraph() {
                     navArgument("dramaId") { type = NavType.IntType },
                     navArgument("episodeId") { type = NavType.LongType },
                 ),
+            enterTransition = {
+                if (initialState.destination.route == Routes.DETAIL) {
+                    slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300))
+                } else {
+                    slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300))
+                }
+            },
+            exitTransition = {
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300))
+            },
+            popEnterTransition = {
+                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300))
+            },
+            popExitTransition = {
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300))
+            },
         ) { backStackEntry ->
             val dramaId = backStackEntry.arguments?.getInt("dramaId") ?: return@composable
             val episodeId = backStackEntry.arguments?.getLong("episodeId") ?: return@composable
@@ -78,9 +114,7 @@ fun NavGraph() {
                 },
                 onCurrentEpisodeChanged = { currentEpisodeId.value = it },
                 onGoDetail = {
-                    navController.navigate(Routes.detail(dramaId)) {
-                        popUpTo(Routes.LIST) { inclusive = false }
-                    }
+                    navController.navigate(Routes.detail(dramaId))
                 },
             )
         }

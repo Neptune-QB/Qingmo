@@ -1,15 +1,8 @@
 package com.qingmo.app.ui.screens
 
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -53,7 +46,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,7 +106,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit) {
         containerColor = Background,
     ) { padding ->
         when {
-            isLoading -> LoadingGrid(Modifier.padding(padding))
+            isLoading -> {}
             error != null ->
                 ErrorState(
                     message = error!!,
@@ -135,17 +127,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit) {
 @Suppress("ktlint:standard:function-naming")
 @Composable
 private fun LoadingGrid(modifier: Modifier = Modifier) {
-    val shimmerAlpha =
-        rememberInfiniteTransition(label = "shimmer").animateFloat(
-            initialValue = 0.25f,
-            targetValue = 0.5f,
-            animationSpec =
-                infiniteRepeatable(
-                    animation = tween(900, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-            label = "shimmer_alpha",
-        )
+    val alpha = 0.4f
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -170,8 +152,8 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                                 Brush.verticalGradient(
                                     colors =
                                         listOf(
-                                            SurfaceVariant.copy(alpha = shimmerAlpha.value),
-                                            Background.copy(alpha = shimmerAlpha.value + 0.1f),
+                                            SurfaceVariant.copy(alpha = alpha),
+                                            Background.copy(alpha = alpha + 0.1f),
                                         ),
                                 ),
                             ),
@@ -182,7 +164,7 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                                 .fillMaxWidth(0.75f)
                                 .height(14.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceVariant.copy(alpha = shimmerAlpha.value)),
+                                .background(SurfaceVariant.copy(alpha = alpha)),
                         )
                         Spacer(Modifier.height(8.dp))
                         Box(
@@ -190,7 +172,7 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                                 .fillMaxWidth(0.45f)
                                 .height(10.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceVariant.copy(alpha = shimmerAlpha.value * 0.7f)),
+                                .background(SurfaceVariant.copy(alpha = alpha * 0.7f)),
                         )
                     }
                 }
@@ -261,11 +243,10 @@ private fun DramaGrid(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        itemsIndexed(dramas, key = { _, d -> d.id }) { index, drama ->
+        itemsIndexed(dramas, key = { _, d -> d.id }) { _, drama ->
             DramaCard(
                 drama = drama,
                 onClick = { onDramaClick(drama.id) },
-                delayMs = index * 50,
             )
         }
     }
@@ -276,7 +257,6 @@ private fun DramaGrid(
 private fun DramaCard(
     drama: DramaBrief,
     onClick: () -> Unit,
-    delayMs: Int = 0,
 ) {
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
@@ -289,31 +269,12 @@ private fun DramaCard(
         label = "card_scale",
     )
 
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(delayMs.toLong())
-        visible = true
-    }
-    val entranceAlpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(350, easing = EaseOutCubic),
-        label = "entrance_alpha",
-    )
-    val entranceOffset by animateFloatAsState(
-        targetValue = if (visible) 0f else 16f,
-        animationSpec = tween(350, easing = EaseOutCubic),
-        label = "entrance_offset",
-    )
-
     Card(
         modifier =
             Modifier
                 .fillMaxWidth()
                 .scale(scale)
-                .graphicsLayer {
-                    alpha = entranceAlpha
-                    translationY = entranceOffset
-                }.clickable(
+                .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = onClick,
@@ -393,5 +354,3 @@ private fun DramaCard(
         }
     }
 }
-
-private val EaseOutCubic = CubicBezierEasing(0.33f, 1f, 0.68f, 1f)

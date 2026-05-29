@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
+import android.util.SparseArray
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -63,7 +64,17 @@ import com.qingmo.app.data.model.DramaBrief
 import com.qingmo.app.data.model.DramaDetail
 import com.qingmo.app.data.model.EpisodeBrief
 import com.qingmo.app.data.repository.DramaRepository
+import com.qingmo.app.ui.theme.Background
+import com.qingmo.app.ui.theme.Border
+import com.qingmo.app.ui.theme.OnBackground
+import com.qingmo.app.ui.theme.OnSurface
+import com.qingmo.app.ui.theme.OnSurfaceVariant
 import com.qingmo.app.ui.theme.PlayerAccent
+import com.qingmo.app.ui.theme.Primary
+import com.qingmo.app.ui.theme.SurfaceVariant
+import com.qingmo.app.xiaomo.XiaoMoCore
+import com.qingmo.app.xiaomo.ui.XiaoMoPanelView
+import com.qingmo.app.xiaomo.ui.XiaoMoPeekView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -140,6 +151,8 @@ private fun Pager(
     var rate by remember { mutableFloatStateOf(1.0f) }
     var showEps by remember { mutableStateOf(false) }
     var showSpd by remember { mutableStateOf(false) }
+    var showXiaoMo by remember { mutableStateOf(false) }
+    var xiaoMoExpanded by remember { mutableStateOf(false) }
     var fullscreen by remember { mutableStateOf(false) }
     var curPos by remember { mutableLongStateOf(0L) }
     var curDur by remember { mutableLongStateOf(0L) }
@@ -213,6 +226,15 @@ private fun Pager(
     DisposableEffect(Unit) { onDispose { adapter.releaseAll() } }
     LaunchedEffect(curPage) { curEp?.let { onCurrentEpisodeChanged(it.episodeId) } }
 
+    // 小墨生命周期：进入播放器 → Peek 状态，退出 → Hidden
+    DisposableEffect(Unit) {
+        XiaoMoCore.onEnterPlayer()
+        showXiaoMo = true
+        onDispose {
+            XiaoMoCore.onExitPlayer()
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { c ->
             ViewPager2(c).apply {
@@ -281,6 +303,28 @@ private fun Pager(
                 showSpd = false
             }, { showSpd = false })
         }
+
+        // 小墨 Peek 视图 — 屏幕右侧边缘
+        if (!fullscreen && showXiaoMo && !xiaoMoExpanded) {
+            XiaoMoPeekView(
+                visible = true,
+                onClick = { xiaoMoExpanded = true },
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+
+        // 小墨 Expanded 面板 — 完整互动面板
+        if (xiaoMoExpanded) {
+            XiaoMoPanelView(
+                visible = true,
+                title = "小墨",
+                onClose = {
+                    xiaoMoExpanded = false
+                    XiaoMoCore.collapse()
+                },
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
     }
 }
 
@@ -306,6 +350,7 @@ private class NativeAdapter(
     var viewPager2: ViewPager2? = null // Reference for touch disallow during seekbar drag
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val progressJobs = mutableMapOf<Int, Job>()
+    private val viewHolders = SparseArray<VH>()
     private val d = dm.density
 
     private fun dp(v: Float) = (v * d + 0.5f).toInt()
@@ -313,7 +358,17 @@ private class NativeAdapter(
     private var activeVh: VH? = null
     private var isFullscreen = false
     private val screenH = dm.heightPixels
-    private val topGradH = (screenH * 0.22f).toInt()
+    private val statusBarH: Int =
+        run {
+            val resid = ctx.resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (resid > 0) ctx.resources.getDimensionPixelSize(resid) else dp(24f)
+        }
+    private val navBarH: Int =
+        run {
+            val resid = ctx.resources.getIdentifier("navigation_bar_height", "dimen", "android")
+            if (resid > 0) ctx.resources.getDimensionPixelSize(resid) else dp(48f)
+        }
+    private val topGradH = (screenH * 0.22f).toInt() + statusBarH
     private val botGradH = (screenH * 0.36f).toInt()
 
     class VH(
@@ -345,7 +400,10 @@ private class NativeAdapter(
         val pv =
             PlayerView(c).apply {
                 useController = false
-                layoutParams = FrameLayout.LayoutParams(-1, -1)
+                resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                layoutParams = FrameLayout.LayoutParams(-1, -1).apply {
+                    bottomMargin = dp(52f)
+                }
             }
         val playIcon =
             ImageView(c).apply {
@@ -387,7 +445,9 @@ private class NativeAdapter(
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
                 layoutParams =
-                    FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
+                    FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+                        topMargin = statusBarH
+                    }
             }
         r.addView(tb)
         tb.addView(
@@ -546,6 +606,7 @@ private class NativeAdapter(
         pos: Int,
     ) {
         val ep = eps[pos]
+        viewHolders.put(pos, h)
         if (pos == cur) activeVh = h
         h.titleTv.text = "\u7B2C${ep.episodeNum}\u96C6"
         h.speedTv.text = "${rate}x"
@@ -624,13 +685,27 @@ private class NativeAdapter(
                     vis
                 viewPager2?.requestDisallowInterceptTouchEvent(dragging)
             }
-        if (pos == cur) applyFullscreenToActiveVh()
+        applyFullscreenToVh(h)
+    }
+
+    private fun applyFullscreenToVh(vh: VH) {
+        val vis = if (isFullscreen) View.INVISIBLE else View.VISIBLE
+        vh.topBar.visibility = vis
+        vh.rightBar.visibility = vis
+        vh.bottomInfo.visibility = vis
+        val bb = vh.root.getChildAt(vh.root.childCount - 1) as? LinearLayout
+        val fb = bb?.getChildAt(2) as? ImageView
+        fb?.setImageResource(
+            if (isFullscreen) com.qingmo.app.R.drawable.fullscreen_exit
+            else com.qingmo.app.R.drawable.fullscreen_enter,
+        )
     }
 
     override fun onViewRecycled(holder: VH) {
         super.onViewRecycled(holder)
         val pos = holder.absoluteAdapterPosition
         if (pos != RecyclerView.NO_POSITION) {
+            viewHolders.remove(pos)
             progressJobs[pos]?.cancel()
             progressJobs.remove(pos)
             // Release ExoPlayer if far from current position (keep cur-1..cur+1)
@@ -659,6 +734,9 @@ private class NativeAdapter(
         activePlayer?.setPlaybackSpeed(rate)
         val sp = ProgressCache.get(eps[pos].episodeId)
         activePlayer?.seekTo(sp)
+        // Find ViewHolder for new position (may have been prefetched before onBindViewHolder set activeVh)
+        val vh = viewHolders.get(pos)
+        if (vh != null) activeVh = vh
         applyFullscreenToActiveVh()
     }
 
@@ -674,25 +752,7 @@ private class NativeAdapter(
     }
 
     private fun applyFullscreenToActiveVh() {
-        activeVh?.let { vh ->
-            val vis = if (isFullscreen) View.INVISIBLE else View.VISIBLE
-            vh.topBar.visibility =
-                vis
-            vh.rightBar.visibility = vis
-            vh.bottomInfo.visibility = vis
-            val bb =
-                vh.root.getChildAt(
-                    vh.root.childCount - 1,
-                ) as? LinearLayout
-            ; val fb = bb?.getChildAt(2) as? ImageView
-            fb?.setImageResource(
-                if (isFullscreen) {
-                    com.qingmo.app.R.drawable.fullscreen_exit
-                } else {
-                    com.qingmo.app.R.drawable.fullscreen_enter
-                },
-            )
-        }
+        activeVh?.let { applyFullscreenToVh(it) }
     }
 
     fun updateProgressBar(
@@ -1023,27 +1083,59 @@ private fun SS(
     onDismiss: () -> Unit,
 ) {
     val speeds = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
-    Surface(onClick = onDismiss, modifier = Modifier.fillMaxSize(), color = Color.Black.copy(alpha = 0.6f)) {
+    Surface(
+        onClick = onDismiss,
+        modifier = Modifier.fillMaxSize(),
+        color = Color.Black.copy(alpha = 0.55f),
+    ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFF1A1A2E)) {
-                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Background,
+                tonalElevation = 4.dp,
+                shadowElevation = 8.dp,
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Text(
                         "\u500D\u901F\u64AD\u653E",
-                        color = Color.White,
+                        color = OnBackground,
                         fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(16.dp))
                     speeds.forEach { sp ->
                         val selected = abs(sp - current) < 0.01f
-                        TextButton(onClick = { onSelect(sp) }, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                "${sp}x",
-                                color = if (selected) PlayerAccent else Color.White.copy(alpha = 0.7f),
-                                fontSize = 16.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) Primary else Color.Transparent,
+                            border = if (selected) null else BorderStroke(1.dp, Border),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(sp) },
+                        ) {
+                            Box(
+                                Modifier.padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "${sp}x",
+                                    color = if (selected) Color.White else OnSurface,
+                                    fontSize = 16.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                )
+                            }
                         }
+                        if (sp != speeds.last()) {
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = onDismiss) {
+                        Text("\u53D6\u6D88", color = OnSurfaceVariant, fontSize = 14.sp)
                     }
                 }
             }

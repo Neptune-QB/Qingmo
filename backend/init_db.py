@@ -17,12 +17,28 @@ DRAMAS_JSON = DATA_DIR / "dramas_data.json"
 
 HIGHLIGHT_TYPES = ["conflict", "twist", "sweet", "famous", "funny", "branch"]
 HIGHLIGHT_TITLES = {
-    "conflict": "\u5267\u60C5\u51B2\u7A81",
-    "twist": "\u60CA\u5929\u53CD\u8F6C",
-    "sweet": "\u751C\u871C\u65F6\u523B",
-    "famous": "\u540D\u573A\u9762",
-    "funny": "\u6458\u7B11\u6865\u6BB5",
-    "branch": "\u5267\u60C5\u5206\u5C94\u70B9",
+    "conflict": "剧情冲突",
+    "twist": "惊天反转",
+    "sweet": "甜蜜时刻",
+    "famous": "名场面",
+    "funny": "搞笑桥段",
+    "branch": "剧情分岐点",
+}
+HIGHLIGHT_EMOTIONS = {
+    "conflict": ["不爽！", "怎么能这样！"],
+    "twist": ["卧槽！", "反转了！"],
+    "sweet": ["甜哭了！", "磕到了！"],
+    "famous": ["名场面！", "封神！"],
+    "funny": ["笑死！", "笑出鹅叫！"],
+    "branch": ["选A！", "选B！"],
+}
+HIGHLIGHT_WIDGETS = {
+    "conflict": "vote",
+    "twist": "emotion",
+    "sweet": "emotion",
+    "famous": "emotion",
+    "funny": "emotion",
+    "branch": "branch",
 }
 
 # Fallback placeholder data when no scraped data available
@@ -113,11 +129,12 @@ def seed():
                 num_h = random.randint(1, 3)
                 for _ in range(num_h):
                     h_type = random.choice(HIGHLIGHT_TYPES)
-                    h_time = random.randint(10, 280)
-                    widget = "branch" if h_type == "branch" else "emoji"
+                    h_time = round(random.uniform(10, 280), 1)
+                    widget = HIGHLIGHT_WIDGETS[h_type]
+                    hints_json = json.dumps(HIGHLIGHT_EMOTIONS[h_type], ensure_ascii=False) if widget != "branch" else None
                     cursor.execute(
-                        "INSERT INTO highlights (episode_id, time, type, title, widget_type) VALUES (?, ?, ?, ?, ?)",
-                        (ep_id, h_time, h_type, HIGHLIGHT_TITLES[h_type], widget),
+                        "INSERT INTO highlights (episode_id, time, type, title, widget_type, emotion_hints, duration) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (ep_id, h_time, h_type, HIGHLIGHT_TITLES[h_type], widget, hints_json, 15),
                     )
 
         conn.commit()
