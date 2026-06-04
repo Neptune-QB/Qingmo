@@ -15,8 +15,15 @@ import androidx.navigation.navArgument
 import com.qingmo.app.ui.screens.DramaDetailScreen
 import com.qingmo.app.ui.screens.DramaListScreen
 import com.qingmo.app.ui.screens.DramaPagerScreen
+import com.qingmo.app.ui.screens.LoginScreen
+import com.qingmo.app.ui.screens.RegisterScreen
+import com.qingmo.app.ui.screens.UserProfileScreen
+import com.qingmo.app.data.auth.TokenManager
 
 object Routes {
+    const val LOGIN = "auth_login"
+    const val REGISTER = "auth_register"
+    const val PROFILE = "user_profile"
     const val LIST = "drama_list"
     const val DETAIL = "drama_detail/{dramaId}"
     const val PLAYER = "player/{dramaId}/{episodeId}"
@@ -31,11 +38,58 @@ object Routes {
 
 @Suppress("ktlint:standard:function-naming")
 @Composable
-fun NavGraph() {
+fun NavGraph(deviceId: String) {
     val navController = rememberNavController()
     val currentEpisodeId = rememberSaveable { mutableStateOf(-1L) }
+    val isLoggedIn = TokenManager.isLoggedIn()
 
-    NavHost(navController = navController, startDestination = Routes.LIST) {
+    NavHost(
+        navController = navController,
+        startDestination = if (isLoggedIn) Routes.LIST else Routes.LOGIN,
+    ) {
+        composable(
+            Routes.LOGIN,
+            enterTransition = { fadeIn(tween(200)) },
+        ) {
+            LoginScreen(
+                onLoginSuccess = {
+                    navController.navigate(Routes.LIST) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
+                onGoRegister = {
+                    navController.navigate(Routes.REGISTER)
+                },
+                deviceId = deviceId,
+            )
+        }
+
+        composable(
+            Routes.REGISTER,
+            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+        ) {
+            RegisterScreen(
+                onRegisterSuccess = {
+                    navController.navigate(Routes.LIST) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
+                onGoLogin = { navController.popBackStack() },
+                deviceId = deviceId,
+            )
+        }
+
+        composable(Routes.PROFILE) {
+            UserProfileScreen(
+                onLogout = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
         composable(
             Routes.LIST,
             enterTransition = { fadeIn(tween(200)) },
@@ -45,6 +99,8 @@ fun NavGraph() {
                 navController.navigate(Routes.player(id, -1L)) {
                     popUpTo(Routes.LIST) { inclusive = false }
                 }
+            }, onProfileClick = {
+                navController.navigate(Routes.PROFILE)
             })
         }
 

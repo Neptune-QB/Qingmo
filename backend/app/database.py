@@ -90,6 +90,114 @@ def init_db():
             preferences TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            nickname TEXT DEFAULT '',
+            avatar TEXT DEFAULT '',
+            device_ids TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS drama_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            summary TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drama_id) REFERENCES dramas(id),
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS drama_characters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            relationships TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drama_id) REFERENCES dramas(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS drama_timeline (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            time_sec REAL DEFAULT 0,
+            event_type TEXT DEFAULT '',
+            event_desc TEXT DEFAULT '',
+            characters TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drama_id) REFERENCES dramas(id),
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS danmaku (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            episode_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            time_sec REAL DEFAULT 0,
+            color TEXT DEFAULT '#ffffff',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS episode_likes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            episode_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, episode_id),
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            drama_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, drama_id),
+            FOREIGN KEY (drama_id) REFERENCES dramas(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS episode_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            episode_id INTEGER NOT NULL,
+            parent_id INTEGER DEFAULT 0,
+            reply_to_user_id TEXT DEFAULT '',
+            user_id TEXT NOT NULL,
+            nickname TEXT DEFAULT '热心网友',
+            avatar_url TEXT DEFAULT '',
+            text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_chat_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            title TEXT DEFAULT '新对话',
+            drama_id INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES user_chat_sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON user_chat_sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON user_chat_messages(session_id);
     """)
 
     conn.commit()
@@ -151,6 +259,28 @@ def migrate_add_columns():
                 FOREIGN KEY (highlight_id) REFERENCES highlights(id)
             )
         """)
+
+    # episode_comments_new 新评论表 + 楼中楼字段安全迁移
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS episode_comments_new(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            episode_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            nickname TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            parent_id INTEGER DEFAULT 0,
+            reply_to_nickname TEXT DEFAULT ''
+        )
+    """)
+    for col in ["parent_id", "reply_to_nickname"]:
+        try:
+            if col == "parent_id":
+                cursor.execute(f"ALTER TABLE episode_comments_new ADD COLUMN {col} INTEGER DEFAULT 0")
+            else:
+                cursor.execute(f"ALTER TABLE episode_comments_new ADD COLUMN {col} TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
 
     conn.commit()
     conn.close()

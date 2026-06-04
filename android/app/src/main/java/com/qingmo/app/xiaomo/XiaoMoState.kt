@@ -24,6 +24,12 @@ data class XiaoMoStateData(
     val currentModuleId: String? = null,
     val currentHighlight: HighlightItem? = null,
     val lastInteractTime: Long = 0L,
+    /** 当前姿态（控制展示哪张 PNG） */
+    val pose: XiaoMoPose = XiaoMoPose.Idle,
+    /** 当前情绪（控制 Emoji 气泡叠加） */
+    val emotion: XiaoMoEmotion = XiaoMoEmotion.Neutral,
+    /** 待一键发送弹幕的高光点，非空代表高光提示已触发 */
+    val pendingDanmakuHighlight: HighlightItem? = null,
 ) {
     val isVisible: Boolean get() = state != XiaoMoState.Hidden
     val isInteracting: Boolean get() = state == XiaoMoState.Interacting

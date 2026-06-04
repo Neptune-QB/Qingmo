@@ -33,6 +33,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,6 +60,7 @@ import com.qingmo.app.data.model.DramaBrief
 import com.qingmo.app.data.repository.DramaRepository
 import com.qingmo.app.ui.theme.Background
 import com.qingmo.app.ui.theme.GradientCyanDark
+import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceVariant
 import com.qingmo.app.ui.theme.Primary
 import com.qingmo.app.ui.theme.SurfaceElevated
@@ -65,7 +70,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Suppress("ktlint:standard:function-naming")
 @Composable
-fun DramaListScreen(onDramaClick: (Int) -> Unit) {
+fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}) {
     val repository = remember { DramaRepository() }
     var dramas by remember { mutableStateOf<List<DramaBrief>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -76,10 +81,21 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit) {
         scope.launch {
             isLoading = true
             error = null
-            repository
-                .getDramas()
-                .onSuccess { dramas = it }
-                .onFailure { error = it.message }
+            try {
+                val result = repository.getDramas()
+                result
+                    .onSuccess {
+                        dramas = it
+                        if (it.isEmpty()) {
+                            error = "后端返回空列表"
+                        }
+                    }
+                    .onFailure {
+                        error = "错误: ${it.message ?: "未知异常"}"
+                    }
+            } catch (e: Throwable) {
+                error = "外层捕获异常: ${e.message ?: e.javaClass.simpleName}"
+            }
             isLoading = false
         }
     }
@@ -96,6 +112,15 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit) {
                         fontWeight = FontWeight.Bold,
                     )
                 },
+                actions = {
+                    IconButton(onClick = onProfileClick) {
+                        Icon(
+                            Icons.Filled.Person,
+                            contentDescription = "我的",
+                            tint = OnSurface,
+                        )
+                    }
+                },
                 colors =
                     TopAppBarDefaults.topAppBarColors(
                         containerColor = Background,
@@ -106,7 +131,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit) {
         containerColor = Background,
     ) { padding ->
         when {
-            isLoading -> {}
+            isLoading -> LoadingGrid(Modifier.padding(padding))
             error != null ->
                 ErrorState(
                     message = error!!,

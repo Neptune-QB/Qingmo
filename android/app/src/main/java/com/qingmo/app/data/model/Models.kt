@@ -41,6 +41,8 @@ data class HighlightItem(
     val title: String,
     @SerializedName("widget_type") val widgetType: String = "emotion",
     val options: List<String>? = null,
+    @SerializedName("emotion_hints") val emotionHints: List<String>? = null,
+    val duration: Int = 15,
 )
 
 @Immutable

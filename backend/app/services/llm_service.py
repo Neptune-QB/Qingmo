@@ -1,8 +1,11 @@
 from typing import AsyncGenerator, Optional, List, Dict, Any
 import asyncio
+import json
 
-from volcenginesdkarkruntime import AsyncArk
+from openai import AsyncOpenAI
+
 from app.config import settings
+from app.database import get_connection
 
 
 SYSTEM_PROMPT_XIAOMO_DEFAULT = """你是「小墨」，青墨短剧平台的 AI 观剧助手。
@@ -18,9 +21,9 @@ RETRY_DELAY_BASE = 1.0  # 秒，指数退避基数
 class LLMService:
     def __init__(self):
         if settings.DOUBAO_API_KEY:
-            self.client = AsyncArk(
+            self.client = AsyncOpenAI(
                 api_key=settings.DOUBAO_API_KEY,
-                base_url=settings.DOUBAO_BASE_URL
+                base_url=settings.DOUBAO_BASE_URL,
             )
         else:
             self.client = None
@@ -50,6 +53,13 @@ class LLMService:
             prompt += f"\n\n当前观剧上下文：{drama_context}"
 
         messages.append({"role": "system", "content": prompt})
+
+        # 注入 RAG 检索上下文
+        extra = ""
+        if isinstance(drama_context, dict):
+            extra = drama_context.pop("_rag_context", "")
+        if extra:
+            messages.append({"role": "system", "content": f"以下是相关剧情资料，请基于此回答用户问题：\n{extra}"})
 
         if history:
             for msg in history:
@@ -83,12 +93,14 @@ class LLMService:
         yield f"小墨思考太久啦，换个方式试试？（{last_error}）"
 
     async def _create_stream(self, messages):
+        if self.client is None:
+            raise RuntimeError("LLM not available")
         return await self.client.chat.completions.create(
             model=settings.DOUBAO_EP_ID,
             messages=messages,
             stream=True,
             temperature=0.7,
-            max_tokens=800
+            max_tokens=800,
         )
 
     async def story_extension(
@@ -123,13 +135,14 @@ class LLMService:
             }
         ]
 
-        resp = await self.client.chat.completions.create(
-            model=settings.DOUBAO_EP_ID,
-            messages=messages,
-            stream=False,
-            temperature=0.8,
-            max_tokens=600
-        )
+        async with self.client as client:
+            resp = await client.chat.completions.create(
+                model=settings.DOUBAO_EP_ID,
+                messages=messages,
+                stream=False,
+                temperature=0.8,
+                max_tokens=600,
+            )
         return resp.choices[0].message.content or "续写失败，请重试。"
 
     async def generate_highlights(
@@ -166,15 +179,15 @@ class LLMService:
             {"role": "user", "content": prompt}
         ]
 
-        resp = await self.client.chat.completions.create(
-            model=settings.DOUBAO_EP_ID,
-            messages=messages,
-            stream=False,
-            temperature=0.3,
-            max_tokens=1000
-        )
+        async with self.client as client:
+            resp = await client.chat.completions.create(
+                model=settings.DOUBAO_EP_ID,
+                messages=messages,
+                stream=False,
+                temperature=0.3,
+                max_tokens=1000,
+            )
 
-        import json
         try:
             text = resp.choices[0].message.content or "[]"
             start_idx = text.find("[")
@@ -186,4 +199,278 @@ class LLMService:
             return []
 
 
+# ===== Agent 意图路由（V1.0 关键词匹配） =====
+
+# 意图分类关键词字典
+INTENT_KEYWORDS = {
+    "search_drama": [
+        "推荐", "找剧", "搜索", "有什么好看的", "甜宠", "古装", "穿越", "悬疑",
+        "仙侠", "校园", "年代", "家庭", "探险", "都市", "霸总", "逆袭",
+        "帮我找", "有没有好看的", "想看", "介绍短剧", "剧荒",
+    ],
+    "user_profile": [
+        "我看过什么", "看过什么剧", "我的收藏", "观看记录", "播放记录",
+        "我最近看了", "看了多少集", "我看了几集", "我看了什么",
+    ],
+}
+
+SEARCH_PROMPT = """你是一个短剧推荐助手。根据用户的问题和以下可用的短剧列表，用活泼可爱的语气推荐最匹配的短剧。
+回复要求：
+1. 最多推荐3部
+2. 每部格式：「剧名」- 一句话推荐理由
+3. 语气要活泼，像朋友推荐
+4. 使用表情符号
+"""
+
+# 搜索词到数据库标签的映射（用户常用词 → 实际标签）
+TAG_SYNONYMS = {
+    "古装": "古代",
+    "甜宠": "爱情",
+    "悬疑": "盗墓",
+    "仙侠": "志怪",
+    "校园": "剧情",
+    "年代": "年代爱情",
+    "霸总": "总裁",
+    "都市": "都市爱情",
+    "冒险": "盗墓",
+    "逆袭": "逆袭",
+}
+
+
+def classify_intent(user_message: str) -> str:
+    """基于关键词匹配的意图分类"""
+    msg_lower = user_message.lower()
+    for intent, keywords in INTENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw in msg_lower:
+                return intent
+    # 包含剧名/剧情讨论类关键词 → LLM 处理
+    return "llm_chat"
+
+
+def search_dramas(query: str, limit: int = 5) -> list[dict]:
+    """
+    短剧检索：按标题 + 标签模糊匹配，支持同义词映射
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # 提取有效搜索词：先去掉常见口语前缀/后缀，再拆分
+    stop_words = ["推荐", "有没有", "有什么", "帮我找", "找", "我想看", "想看", "介绍", "搜索", "剧", "类的", "类型", "的好剧"]
+    clean = query
+    for sw in stop_words:
+        clean = clean.replace(sw, " ")
+    keywords_raw = [w.strip() for w in clean.replace("，", ",").replace("、", ",").replace(" ", ",").split(",") if w.strip()]
+
+    # 应用同义词映射：扩展搜索词（支持子串匹配）
+    keywords = []
+    for kw in keywords_raw:
+        keywords.append(kw)
+        for syn_key, syn_val in TAG_SYNONYMS.items():
+            if syn_key in kw:
+                keywords.append(syn_val)
+
+    if not keywords:
+        cursor.execute("SELECT id, title, cover_url, total_episodes FROM dramas ORDER BY total_episodes DESC LIMIT ?", (limit,))
+    else:
+        conditions = []
+        params = []
+        for kw in keywords:
+            conditions.append("(d.title LIKE ? OR dt.tag LIKE ?)")
+            params.extend([f"%{kw}%", f"%{kw}%"])
+        where = " OR ".join(conditions)
+        sql = f"""
+            SELECT DISTINCT d.id, d.title, d.cover_url, d.total_episodes
+            FROM dramas d
+            LEFT JOIN drama_tags dt ON d.id = dt.drama_id
+            WHERE {where}
+            ORDER BY d.total_episodes DESC
+            LIMIT ?
+        """
+        params.append(limit)
+        cursor.execute(sql, params)
+
+    rows = cursor.fetchall()
+    result = []
+    for r in rows:
+        cursor.execute("SELECT tag FROM drama_tags WHERE drama_id = ?", (r["id"],))
+        tags = [t["tag"] for t in cursor.fetchall()]
+        result.append({
+            "id": r["id"],
+            "title": r["title"],
+            "cover_url": r["cover_url"],
+            "tags": tags,
+            "total_episodes": r["total_episodes"],
+        })
+    conn.close()
+    return result
+
+
+def get_user_profile_summary(user_id: str) -> str:
+    """
+    为用户画像生成自然语言摘要
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # 观看统计
+    cursor.execute("SELECT COUNT(*) as cnt FROM user_progress WHERE watched = 1")
+    watched_count = cursor.fetchone()["cnt"] or 0
+
+    cursor.execute("""
+        SELECT e.drama_id, d.title, COUNT(*) as ep_count
+        FROM user_progress up
+        JOIN episodes e ON up.episode_id = e.episode_id
+        JOIN dramas d ON e.drama_id = d.id
+        WHERE up.watched = 1
+        GROUP BY e.drama_id
+        ORDER BY ep_count DESC
+        LIMIT 3
+    """)
+    top_dramas = [dict(r) for r in cursor.fetchall()]
+
+    # 互动统计
+    cursor.execute(
+        "SELECT module_id, COUNT(*) as cnt FROM user_interactions WHERE user_id = ? GROUP BY module_id",
+        (user_id,),
+    )
+    interaction_stats = {r["module_id"]: r["cnt"] for r in cursor.fetchall()}
+
+    conn.close()
+
+    parts = []
+    if watched_count > 0:
+        parts.append(f"你一共看过 {watched_count} 集短剧")
+        if top_dramas:
+            names = "、".join(d["title"] for d in top_dramas[:2])
+            parts.append(f"最爱看的是《{names}》")
+    else:
+        parts.append("你还没有看过短剧哦，快去看看吧~")
+
+    if interaction_stats:
+        emotion_count = interaction_stats.get("emotion", 0)
+        vote_count = interaction_stats.get("vote", 0)
+        if emotion_count > 0:
+            parts.append(f"发了 {emotion_count} 次情绪弹幕")
+        if vote_count > 0:
+            parts.append(f"参与了 {vote_count} 次剧情投票")
+
+    return "！".join(parts) + "！" if parts else "小墨还没记住你呢，一起看剧吧~"
+
+
 llm_service = LLMService()
+
+
+# ===== RAG 剧情检索 =====
+def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = None) -> str:
+    """
+    从剧情知识库检索与用户问题相关的上下文，注入为 LLM system prompt 附件。
+    检索策略：
+    1. 从 drama_summaries 中按关键词匹配
+    2. 从 drama_characters 中按人名匹配
+    3. 从 drama_timeline 中按事件类型/关键词匹配
+    4. 兜底返回当前剧集摘要
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    parts = []
+    keywords = [w.strip() for w in user_message.replace("？", " ").replace("?", " ").replace("，", " ").split() if len(w.strip()) >= 2]
+
+    # 确定目标 drama_id
+    drama_id = None
+    if drama_context:
+        drama_id = drama_context.get("drama_id") or drama_context.get("dramaId")
+
+    # 1. 人物检索
+    char_conditions = []
+    char_params = []
+    for kw in keywords:
+        char_conditions.append("name LIKE ? OR description LIKE ?")
+        char_params.extend([f"%{kw}%", f"%{kw}%"])
+    if char_conditions:
+        sql = "SELECT name, role, description, relationships FROM drama_characters WHERE " + " OR ".join(char_conditions)
+        if drama_id:
+            sql += " AND drama_id = ?"
+            char_params.append(drama_id)
+        sql += " LIMIT 5"
+        cursor.execute(sql, char_params)
+        chars = cursor.fetchall()
+        if chars:
+            lines = ["【人物关系】"]
+            for ch in chars:
+                rels = ch["relationships"]
+                try:
+                    rels = json.loads(rels) if isinstance(rels, str) else rels
+                except Exception:
+                    rels = []
+                rel_str = "、".join(f"{r.get('to','?')}({r.get('relation','?')})" for r in rels) if rels else "暂无"
+                lines.append(f"  {ch['name']}（{ch['role']}）: {ch['description']}；关系：{rel_str}")
+            parts.append("\n".join(lines))
+
+    # 2. 时间线/事件检索
+    event_conditions = []
+    event_params = []
+    for kw in keywords:
+        event_conditions.append("event_desc LIKE ? OR event_type LIKE ? OR characters LIKE ?")
+        event_params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
+    if event_conditions:
+        sql = """
+            SELECT dt.episode_id, dt.time_sec, dt.event_type, dt.event_desc, dt.characters, e.episode_num
+            FROM drama_timeline dt
+            JOIN episodes e ON dt.episode_id = e.episode_id
+            WHERE """ + " OR ".join(event_conditions)
+        if drama_id:
+            sql += " AND dt.drama_id = ?"
+            event_params.append(drama_id)
+        sql += " ORDER BY e.episode_num, dt.time_sec LIMIT 8"
+        cursor.execute(sql, event_params)
+        events = cursor.fetchall()
+        if events:
+            lines = ["【关键事件】"]
+            for ev in events:
+                lines.append(f"  第{ev['episode_num']}集@{ev['time_sec']}s [{ev['event_type']}] {ev['event_desc']}（角色: {ev['characters']}）")
+            parts.append("\n".join(lines))
+
+    # 3. 弹幕检索：匹配用户提到的弹幕内容、热议点、观众吐槽
+    danmaku_conditions = []
+    danmaku_params = []
+    for kw in keywords:
+        danmaku_conditions.append("text LIKE ?")
+        danmaku_params.append(f"%{kw}%")
+    if danmaku_conditions:
+        sql = """
+            SELECT d.text, d.time_sec, e.episode_num
+            FROM danmaku d
+            JOIN episodes e ON d.episode_id = e.episode_id
+            WHERE """ + " OR ".join(danmaku_conditions)
+        if drama_id:
+            sql += " AND e.drama_id = ?"
+            danmaku_params.append(drama_id)
+        sql += " ORDER BY d.time_sec LIMIT 10"
+        cursor.execute(sql, danmaku_params)
+        danmakus = cursor.fetchall()
+        if danmakus:
+            lines = ["【观众弹幕热议】"]
+            for dm in danmakus:
+                lines.append(f"  第{dm['episode_num']}集@{dm['time_sec']:.1f}s: {dm['text']}")
+            parts.append("\n".join(lines))
+
+    # 4. 摘要兜底：取当前剧集（或最近几集）的摘要
+    if drama_id:
+        cursor.execute("""
+            SELECT ds.episode_id, ds.summary, e.episode_num
+            FROM drama_summaries ds
+            JOIN episodes e ON ds.episode_id = e.episode_id
+            WHERE ds.drama_id = ?
+            ORDER BY e.episode_num
+            LIMIT 3
+        """, (drama_id,))
+        summaries = cursor.fetchall()
+        if summaries:
+            lines = ["【剧情摘要】"]
+            for s in summaries:
+                lines.append(f"  第{s['episode_num']}集: {s['summary']}")
+            parts.append("\n".join(lines))
+
+    conn.close()
+    return "\n\n".join(parts) if parts else ""

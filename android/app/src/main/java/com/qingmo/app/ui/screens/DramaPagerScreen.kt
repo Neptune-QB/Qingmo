@@ -2,6 +2,7 @@ package com.qingmo.app.ui.screens
 
 import android.content.Context
 import android.graphics.Canvas
+import android.util.Log
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.util.SparseArray
@@ -26,8 +27,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
@@ -36,25 +41,40 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
@@ -75,6 +95,13 @@ import com.qingmo.app.ui.theme.SurfaceVariant
 import com.qingmo.app.xiaomo.XiaoMoCore
 import com.qingmo.app.xiaomo.ui.XiaoMoPanelView
 import com.qingmo.app.xiaomo.ui.XiaoMoPeekView
+import com.qingmo.app.xiaomo.ui.XiaoMoChatPanel
+import com.qingmo.app.ui.components.OverlayInput
+import com.qingmo.app.ui.components.DanmakuView
+import com.qingmo.app.ui.components.DanmakuItem
+import com.qingmo.app.data.user.DeviceIdProvider
+import android.widget.Toast
+import android.graphics.Color as AndroidColor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -148,6 +175,7 @@ private fun Pager(
         remember(startId, sorted) { sorted.indexOfFirst { it.episodeId == startId }.coerceIn(0, sorted.lastIndex) }
     var curPage by remember { mutableIntStateOf(startIdx) }
     var danmaku by remember { mutableStateOf(true) }
+    var lastDanmakuToggleTime by remember { mutableLongStateOf(0L) }
     var rate by remember { mutableFloatStateOf(1.0f) }
     var showEps by remember { mutableStateOf(false) }
     var showSpd by remember { mutableStateOf(false) }
@@ -156,6 +184,12 @@ private fun Pager(
     var fullscreen by remember { mutableStateOf(false) }
     var curPos by remember { mutableLongStateOf(0L) }
     var curDur by remember { mutableLongStateOf(0L) }
+    val userId = remember { DeviceIdProvider.getDeviceId(ctx) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var showDanmakuInput by remember { mutableStateOf(false) }
+    var showCommentInput by remember { mutableStateOf(false) }
+    var showDiscussionSheetEpisodeId by remember { mutableLongStateOf(-1L) }
+    var danmakuSentText by remember { mutableStateOf<String?>(null) }
     var vp2 by remember { mutableStateOf<ViewPager2?>(null) }
     val curEp = remember(curPage, sorted) { sorted.getOrNull(curPage) }
     val dramas = remember(allDramas) { allDramas.sortedBy { it.id } }
@@ -192,7 +226,35 @@ private fun Pager(
                 { showEps = true },
                 onGoDetail,
                 prevDrama,
-            ).also { it.onFullscreenChange = { fs -> fullscreen = fs } }
+            ).also {
+                it.onFullscreenChange = { fs -> fullscreen = fs }
+                it.onPlayerTap = {
+                    if (showDanmakuInput || showCommentInput) {
+                        showDanmakuInput = false
+                        showCommentInput = false
+                    } else {
+                        it.activePlayer?.playWhenReady = !(it.activePlayer?.playWhenReady ?: true)
+                    }
+                }
+                it.onLikeClick = { episodeId ->
+                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                        try { RetrofitClient.api.toggleLike(episodeId, mapOf("user_id" to userId)) }
+                        catch (_: Exception) {}
+                    }
+                }
+                it.onFavoriteClick = { dramaId ->
+                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                        try { RetrofitClient.api.toggleFavorite(dramaId.toInt(), mapOf("user_id" to userId)) }
+                        catch (_: Exception) {}
+                    }
+                }
+                it.onCommentClick = { epId ->
+                    showDiscussionSheetEpisodeId = epId
+                    showCommentInput = true
+                }
+                it.onDanmakuClick = { showDanmakuInput = true }
+                it.userId = userId
+            }
         }
     LaunchedEffect(Unit) {
         while (true) {
@@ -304,28 +366,114 @@ private fun Pager(
             }, { showSpd = false })
         }
 
-        // 小墨 Peek 视图 — 屏幕右侧边缘
+        // 小墨 Peek — 右侧栏上方
         if (!fullscreen && showXiaoMo && !xiaoMoExpanded) {
             XiaoMoPeekView(
                 visible = true,
                 onClick = { xiaoMoExpanded = true },
-                modifier = Modifier.align(Alignment.CenterEnd),
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(bottom = 240.dp),
             )
         }
 
-        // 小墨 Expanded 面板 — 完整互动面板
+        // 小墨对话框
         if (xiaoMoExpanded) {
             XiaoMoPanelView(
-                visible = true,
-                title = "小墨",
-                onClose = {
-                    xiaoMoExpanded = false
-                    XiaoMoCore.collapse()
+                visible = true, title = "小墨",
+                onClose = { xiaoMoExpanded = false; XiaoMoCore.collapse() },
+                children = {
+                    XiaoMoChatPanel(
+                        userId = userId,
+                        dramaContext = curEp?.let { mapOf("drama_id" to detail.id, "drama_title" to detail.title, "episode_num" to it.episodeNum) },
+                    )
                 },
-                modifier = Modifier.align(Alignment.CenterEnd),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(bottom = 100.dp),
+            )
+        }
+
+        // 弹幕输入浮层
+        LaunchedEffect(showDanmakuInput, showCommentInput) {
+            globalAnyInputVisible = showDanmakuInput || showCommentInput
+        }
+        OverlayInput(
+            visible = showDanmakuInput,
+            placeholder = "发一条弹幕...",
+            danmakuVisible = danmaku,
+            onDanmakuToggle = {
+                val now = System.currentTimeMillis()
+                if (now - lastDanmakuToggleTime > 300) {
+                    lastDanmakuToggleTime = now
+                    danmaku = !danmaku
+                    adapter.setDanmakuEnabled(danmaku)
+                    Toast.makeText(ctx, if (danmaku) "弹幕已开启" else "弹幕已隐藏", Toast.LENGTH_SHORT).show()
+                }
+            },
+            maxLength = 40,
+            onSend = { text ->
+                val ep = curEp
+                if (ep == null) {
+                    Toast.makeText(ctx, "请先选择剧集", Toast.LENGTH_SHORT).show()
+                    keyboardController?.hide()
+                } else {
+                    // 即时本地渲染：先飘屏，再异步发请求，避免时间窗口过期
+                    val nowSec = curPos / 1000f
+                    val item = DanmakuItem(id = System.currentTimeMillis(), text = text, timeSec = nowSec, color = AndroidColor.WHITE, userId = userId)
+                    adapter.addDanmakuToCurrent(ep.episodeId, item, forceEmit = true)
+                    danmakuSentText = "弹幕已发送"
+                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                        try {
+                            RetrofitClient.api.postDanmaku(mapOf("user_id" to userId, "episode_id" to ep.episodeId, "text" to text, "time_sec" to nowSec))
+                        } catch (_: Exception) { }
+                    }
+                    keyboardController?.hide()
+                }
+            },
+            onDismiss = { showDanmakuInput = false },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+
+        // 讨论完整弹窗 — 从持久化Auth取真实当前登录用户ID
+        DiscussionSheet(
+            visible = showCommentInput,
+            episodeId = showDiscussionSheetEpisodeId,
+            userId = com.qingmo.app.data.auth.TokenManager.getUserId().toString(),
+            scope = rememberCoroutineScope(),
+            onDismiss = { showCommentInput = false }
+        )
+
+        // 弹幕发送成功提示 — 播放器上半区居中
+        if (danmakuSentText != null) {
+            var visible by remember { mutableStateOf(true) }
+            val alpha by animateFloatAsState(
+                targetValue = if (visible) 1f else 0f,
+                animationSpec = tween(300),
+                finishedListener = { if (!visible) danmakuSentText = null }
+            )
+            LaunchedEffect(danmakuSentText) {
+                delay(1200L)
+                visible = false
+            }
+            Text(
+                text = danmakuSentText ?: "",
+                color = Color(0xFF1A535C),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 120.dp)
+                    .alpha(alpha)
+                    .background(Color(0xFFFAF8F0).copy(alpha = alpha), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
             )
         }
     }
+}
+
+private fun formatCount(n: Int): String = when {
+    n >= 10000 -> "${n / 10000}.${(n % 10000) / 1000}w"
+    n > 0 -> n.toString()
+    else -> "0"
 }
 
 private class NativeAdapter(
@@ -344,6 +492,11 @@ private class NativeAdapter(
     private val onGoDetail: () -> Unit,
     private val onPrevDrama: () -> Unit,
     var onFullscreenChange: ((Boolean) -> Unit)? = null,
+    var onLikeClick: ((Long) -> Unit)? = null,
+    var onCommentClick: ((Long) -> Unit)? = null,
+    var onFavoriteClick: ((Long) -> Unit)? = null,
+    var onDanmakuClick: (() -> Unit)? = null,
+    var userId: String = "",
 ) : RecyclerView.Adapter<NativeAdapter.VH>() {
     val players = mutableMapOf<Int, ExoPlayer>()
     var activePlayer: ExoPlayer? = null
@@ -352,11 +505,22 @@ private class NativeAdapter(
     private val progressJobs = mutableMapOf<Int, Job>()
     private val viewHolders = SparseArray<VH>()
     private val d = dm.density
+    private var danmakuGlobalEnabled = true
+
+    fun setDanmakuEnabled(enabled: Boolean) {
+        danmakuGlobalEnabled = enabled
+        for (i in 0 until viewHolders.size()) {
+            viewHolders.valueAt(i).danmakuView.setDanmakuEnabled(enabled)
+        }
+    }
 
     private fun dp(v: Float) = (v * d + 0.5f).toInt()
 
     private var activeVh: VH? = null
     private var isFullscreen = false
+    private val danmakuCache = mutableMapOf<Long, List<DanmakuItem>>()
+    private val danmakuLoaded = mutableSetOf<Long>()
+    private val danmakuDataSetTriggered = mutableSetOf<Long>() // 弹幕数据已经给DanmakuView设置过一次，永远不再重复调用
     private val screenH = dm.heightPixels
     private val statusBarH: Int =
         run {
@@ -371,18 +535,23 @@ private class NativeAdapter(
     private val topGradH = (screenH * 0.22f).toInt() + statusBarH
     private val botGradH = (screenH * 0.36f).toInt()
 
+    var onPlayerTap: (() -> Unit)? = null
     class VH(
         val root: FrameLayout,
         val pv: PlayerView,
+        val danmakuView: DanmakuView,
         val titleTv: TextView,
         val speedTv: TextView,
         val descTv: TextView,
-        val danmakuBtn: TextView,
+        val danmakuBtn: ImageView,
         val seekBar: SeekBar,
         val timeLabel: TextView,
         val topBar: View,
         val rightBar: View,
         val bottomInfo: View,
+        val likeLabel: TextView,
+        val commentLabel: TextView,
+        val favoriteLabel: TextView,
     ) : RecyclerView.ViewHolder(root)
 
     override fun getItemCount() = eps.size
@@ -415,11 +584,7 @@ private class NativeAdapter(
                     View.GONE
             }
         pv.setOnClickListener {
-            players[cur]?.let {
-                it.playWhenReady = !it.playWhenReady
-                playIcon.visibility =
-                    if (it.playWhenReady) View.GONE else View.VISIBLE
-            }
+            onPlayerTap?.invoke()
         }
         r.addView(pv)
         r.addView(playIcon)
@@ -439,6 +604,14 @@ private class NativeAdapter(
                     FrameLayout.LayoutParams(-1, botGradH, Gravity.BOTTOM)
             },
         )
+        val danmakuView = DanmakuView(c).apply {
+            setDanmakuEnabled(danmakuGlobalEnabled)
+            layoutParams = FrameLayout.LayoutParams(-1, -1).apply {
+                topMargin = statusBarH + dp(44f)
+                bottomMargin = dp(52f)
+            }
+        }
+        r.addView(danmakuView)
         val tb =
             LinearLayout(c).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -475,13 +648,93 @@ private class NativeAdapter(
                             -2,
                             -2,
                             Gravity.END or Gravity.BOTTOM,
-                        ).apply { setMargins(0, 0, dp(14f), dp(130f)) }
+                        ).apply { setMargins(0, 0, dp(0f), dp(130f)) }
             }
         r.addView(rb)
-        rb.addView(actionItem("\u2605", "7.7\u4E07"))
-        rb.addView(actionItem("\uD83D\uDCAC", "129"))
-        rb.addView(actionItem("\u2665", "2387"))
-        rb.addView(actionItem("\u2197", "\u5206\u4EAB"))
+        fun formatCount(n: Int): String {
+            return when {
+                n >= 10000 -> "%.1fW".format(n / 10000f)
+                n >= 1000 -> "%.1fK".format(n / 1000f)
+                else -> n.toString()
+            }
+        }
+        var favoriteCount = 0
+        val favoriteLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
+        var isFavorited = false
+        var favoriteIv = ImageView(c).apply {
+            setImageResource(com.qingmo.app.R.drawable.unstarred)
+            adjustViewBounds = true
+        }
+        val favoriteContainer = FrameLayout(c).apply {
+            setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
+            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            favoriteIv.layoutParams = lp
+            addView(favoriteIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
+            setOnClickListener {
+                isFavorited = !isFavorited
+                if (isFavorited) favoriteCount += 1 else favoriteCount -= 1
+                favoriteLabel.text = formatCount(favoriteCount)
+                favoriteIv.setImageResource(if (isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                favoriteIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
+                    favoriteIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                }.start()
+            }
+        }
+        rb.addView(actionItemWithLabelCustom(favoriteContainer, favoriteLabel))
+        var commentCount = 0
+        val commentLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
+        val commentIv = ImageView(c).apply {
+            setImageResource(com.qingmo.app.R.drawable.review)
+            adjustViewBounds = true
+        }
+        val commentContainer = FrameLayout(c).apply {
+            setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
+            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            commentIv.layoutParams = lp
+            addView(commentIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
+        }
+        rb.addView(actionItemWithLabelCustom(commentContainer, commentLabel))
+        var shareCount = 0
+        val shareLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
+        val shareIv = TextView(c).apply {
+            text = "\u2197"
+            textSize = 24f
+            setTextColor(C_WHITE85)
+            gravity = Gravity.CENTER
+        }
+        val shareContainer = FrameLayout(c).apply {
+            setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
+            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            shareIv.layoutParams = lp
+            addView(shareIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
+            setOnClickListener {
+                shareCount +=1
+                shareLabel.text = formatCount(shareCount)
+            }
+        }
+        var likeCount = 0
+        val likeLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
+        var isLiked = false
+        val likeIv = ImageView(c).apply {
+            setImageResource(com.qingmo.app.R.drawable.dislike)
+            adjustViewBounds = true
+        }
+        val likeContainer = FrameLayout(c).apply {
+            setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
+            addView(likeIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
+            setOnClickListener {
+                isLiked = !isLiked
+                if (isLiked) likeCount += 1 else likeCount -=1
+                likeLabel.text = formatCount(likeCount)
+                likeIv.setImageResource(if (isLiked) com.qingmo.app.R.drawable.like else com.qingmo.app.R.drawable.dislike)
+                // 爱心弹性弹跳动效，小放大倍数完全无裁剪
+                likeIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
+                    likeIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                }.start()
+            }
+        }
+        rb.addView(actionItemWithLabelCustom(likeContainer, likeLabel))
+        rb.addView(actionItemWithLabelCustom(shareContainer, shareLabel))
         val bi =
             LinearLayout(c).apply {
                 orientation = LinearLayout.VERTICAL
@@ -491,20 +744,20 @@ private class NativeAdapter(
             }
         r.addView(bi)
         val danmakuBtn =
-            makeTv("\u5F39", 13f, C_WHITE85).apply {
-                setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
-                background =
-                    GradientDrawable().apply {
-                        cornerRadius = dp(6f).toFloat()
-                        setColor(0x38FFFFFF)
-                    }
+            ImageView(c).apply {
+                setImageResource(com.qingmo.app.R.drawable.danmu)
+                adjustViewBounds = true
+                setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
+                background = android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(0x40FFFFFF),
+                    null,
+                    null
+                )
                 setOnClickListener {
-                    danmaku =
-                        !danmaku
-                    ; updateDanmaku(this)
+                    onDanmakuClick?.invoke()
                 }
             }
-        bi.addView(danmakuBtn, LinearLayout.LayoutParams(-2, -2))
+        bi.addView(danmakuBtn, LinearLayout.LayoutParams(dp(36f), dp(36f)))
         bi.addView(Space(c).apply { minimumHeight = dp(6f) })
         bi.addView(
             makeTv(detail.title, 18f, C_WHITE, true).apply {
@@ -598,7 +851,7 @@ private class NativeAdapter(
                 layoutParams = LinearLayout.LayoutParams(dp(28f), dp(28f))
             }
         bottomBar.addView(fsBtn)
-        return VH(r, pv, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, tb, rb, bi)
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel)
     }
 
     override fun onBindViewHolder(
@@ -607,43 +860,119 @@ private class NativeAdapter(
     ) {
         val ep = eps[pos]
         viewHolders.put(pos, h)
+        // 核心修复：软键盘弹出ViewHolder彻底重建 → 立刻从本地缓存恢复弹幕，不需要重新加载网络
+        danmakuCache[ep.episodeId]?.let { cachedItems ->
+            h.danmakuView.setDanmakuData(cachedItems)
+            danmakuDataSetTriggered.add(ep.episodeId)
+            players[pos]?.currentPosition?.let { posMs ->
+                h.danmakuView.updatePlaybackTime(posMs)
+            }
+        }
         if (pos == cur) activeVh = h
         h.titleTv.text = "\u7B2C${ep.episodeNum}\u96C6"
         h.speedTv.text = "${rate}x"
+        // 加载计数
+        scope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.api.getEpisodeCounts(ep.episodeId, "")
+                val likeCnt = (resp["like_count"] as? Number)?.toInt() ?: 0
+                val commentCnt = (resp["comment_count"] as? Number)?.toInt() ?: 0
+                h.likeLabel.post { h.likeLabel.text = formatCount(likeCnt) }
+                h.commentLabel.post { h.commentLabel.text = formatCount(commentCnt) }
+            } catch (_: Exception) {}
+        }
+        // 加载弹幕：完全绕过Compose状态竞态
+        h.danmakuView.setDanmakuEnabled(danmakuGlobalEnabled)
+        h.danmakuView.setCurrentUserId(userId)
+        if (danmakuGlobalEnabled && danmakuLoaded.add(ep.episodeId)) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val items = RetrofitClient.api.getDanmaku(ep.episodeId).map { r ->
+                        val colorStr = (r["color"] as? String) ?: "#ffffff"
+                        val color = try { AndroidColor.parseColor(colorStr) } catch (_: Exception) { AndroidColor.WHITE }
+                        DanmakuItem(
+                            id = ((r["id"] as? Number)?.toLong() ?: 0L),
+                            text = (r["text"] as? String) ?: "",
+                            timeSec = ((r["time_sec"] as? Number)?.toFloat() ?: 0f),
+                            color = color,
+                            userId = (r["user_id"] as? String) ?: "",
+                        )
+                    }
+                    danmakuCache[ep.episodeId] = items
+                    h.danmakuView.post { h.danmakuView.setDanmakuData(items) }
+                } catch (_: Exception) {}
+            }
+        } else if (danmakuGlobalEnabled) {
+            danmakuCache[ep.episodeId]?.let { items ->
+                h.danmakuView.post { h.danmakuView.setDanmakuData(items) }
+            }
+        }
+        // 点击 100%真实addView顺序：0=收藏 1=评论 2=点赞 3=分享
+        val rg = h.rightBar as ViewGroup
+        // 收藏按钮
+        rg.getChildAt(0).setOnClickListener { onFavoriteClick?.invoke(detail.id.toLong()) }
+        // 评论按钮 就是review.png图标 绝对正确位置
+        rg.getChildAt(1).setOnClickListener {
+            // 先弹跳动效
+            (rg.getChildAt(1) as ViewGroup).getChildAt(0).animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
+                (rg.getChildAt(1) as ViewGroup).getChildAt(0).animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }.start()
+            onCommentClick?.invoke(ep.episodeId)
+        }
+        // 点赞按钮
+        rg.getChildAt(2).setOnClickListener { onLikeClick?.invoke(ep.episodeId) }
+        // 分享按钮
+        rg.getChildAt(3).setOnClickListener {  }
         val player =
             players[pos] ?: run {
                 val sp = ProgressCache.get(ep.episodeId)
-                ExoPlayer.Builder(ctx).build().apply {
-                    setPlaybackSpeed(rate)
-                    addListener(
-                        object : Player.Listener {
-                            override fun onPlaybackStateChanged(state: Int) {
-                                if (state ==
-                                    Player.STATE_ENDED &&
-                                    pos == cur
-                                ) {
-                                    ProgressCache.markWatched(eps[pos].episodeId)
-                                    ProgressCache.save(eps[pos].episodeId, 0L)
-                                    onEpisodeEnd(
-                                        pos + 1,
-                                    )
-                                }
-                            }
-                        },
-                    )
-                    scope.launch {
-                        repo.getPlaybackInfo(ep.episodeId).onSuccess { info ->
-                            setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl(info.videoUrl)))
-                            prepare()
-                            if (sp >
-                                0L
-                            ) {
-                                seekTo(sp)
-                            }
-                        }
-                    }
-                    players[pos] = this
+                // 本地即时生成视频URL，完全消除等待后端playback接口的网络RoundTrip，实现秒加载
+                val localVideoUrl = when (detail.id) {
+                    1 -> "videos/1/${63 + ep.episodeNum - 1}.mp4"
+                    else -> "videos/${detail.id}/${ep.episodeNum}.mp4"
                 }
+                ExoPlayer.Builder(ctx)
+                    .setLoadControl(
+                        DefaultLoadControl.Builder()
+                            .setBufferDurationsMs(
+                                50_000,      // 最小开始播放缓冲 50ms 秒开
+                                200_000,     // 最大预缓冲 200ms
+                                2500,        // 回放缓冲 2.5s
+                                5000         // 重新加载缓冲阈值 5s
+                            )
+                            .setPrioritizeTimeOverSizeThresholds(true)
+                            .build()
+                    )
+                    .build().apply {
+                        setPlaybackSpeed(rate)
+                        addListener(
+                            object : Player.Listener {
+                                override fun onPlaybackStateChanged(state: Int) {
+                                    if (state ==
+                                        Player.STATE_ENDED &&
+                                        pos == cur
+                                    ) {
+                                        ProgressCache.markWatched(eps[pos].episodeId)
+                                        ProgressCache.save(eps[pos].episodeId, 0L)
+                                        onEpisodeEnd(
+                                            pos + 1,
+                                        )
+                                    }
+                                }
+                                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                                    if (isPlaying) h.danmakuView.resumeDanmaku()
+                                    else h.danmakuView.pauseDanmaku()
+                                }
+                            },
+                        )
+                        // 立即设置媒体源+开始预加载，不等任何网络IO
+                        setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl(localVideoUrl)))
+                        prepare()
+                        if (sp > 0L) {
+                            seekTo(sp)
+                        }
+                        players[pos] = this
+                    }
             }
         h.pv.player = player
         progressJobs[pos]?.cancel()
@@ -651,23 +980,21 @@ private class NativeAdapter(
             scope.launch {
                 var last = 0L
                 while (true) {
+                    val p = player.currentPosition
                     if (player.isPlaying) {
-                        val p = player.currentPosition
-                        if (p -
-                            last >=
-                            2000
-                        ) {
+                        if (p - last >= 2000) {
                             ProgressCache.save(ep.episodeId, p)
                             last = p
                         }
                     }
+                    h.danmakuView.updatePlaybackTime(p)
                     delay(200)
                 }
             }
         val savedMs = ProgressCache.get(ep.episodeId)
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
-        h.seekBar.onSeek = { player.seekTo(it) }
+        h.seekBar.onSeek = { ms -> player.seekTo(ms); h.danmakuView.seekTo(ms) }
         h.seekBar.setPlayer(player)
         h.seekBar.onDragChange =
             { dragging ->
@@ -704,6 +1031,7 @@ private class NativeAdapter(
     override fun onViewRecycled(holder: VH) {
         super.onViewRecycled(holder)
         val pos = holder.absoluteAdapterPosition
+        holder.danmakuView.clearDanmaku()
         if (pos != RecyclerView.NO_POSITION) {
             viewHolders.remove(pos)
             progressJobs[pos]?.cancel()
@@ -723,6 +1051,26 @@ private class NativeAdapter(
                 cornerRadius = dp(6f).toFloat()
                 setColor(if (danmaku) 0x38FFFFFF else C_WHITE20)
             }
+        // 更新所有 ViewHolder 的弹幕显示状态
+        for (i in 0 until viewHolders.size()) {
+            viewHolders.valueAt(i)?.danmakuView?.setDanmakuEnabled(danmaku)
+        }
+    }
+
+    fun addDanmakuToCurrent(episodeId: Long, item: DanmakuItem, forceEmit: Boolean = false) {
+        // 更新缓存
+        val list = danmakuCache[episodeId]?.toMutableList() ?: mutableListOf()
+        list.add(item)
+        danmakuCache[episodeId] = list
+        // 添加到所有展示该剧集 ViewHolder 的排期队列
+        for (i in 0 until viewHolders.size()) {
+            val h = viewHolders.valueAt(i)
+            val pos = viewHolders.keyAt(i)
+            if (h != null && pos < eps.size && eps[pos].episodeId == episodeId) {
+                if (forceEmit) h.danmakuView.forceEmitDanmaku(item)
+                else h.danmakuView.addPendingDanmaku(item)
+            }
+        }
     }
 
     fun setActive(pos: Int) {
@@ -974,6 +1322,22 @@ private class NativeAdapter(
         item.addView(makeTv(label, 11f, C_WHITE85).apply { gravity = Gravity.CENTER })
         return item
     }
+
+    private fun actionItemWithLabel(icon: String, labelTv: TextView): LinearLayout {
+        val item = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(0, dp(0f), 0, dp(0f)) }
+        item.addView(makeTv(icon, 24f, C_WHITE85).apply { gravity = Gravity.CENTER })
+        item.addView(labelTv)
+        return item
+    }
+
+    private fun actionItemWithLabelCustom(iconView: android.view.View, labelTv: TextView): LinearLayout {
+        val item = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(0, dp(0f), 0, dp(0f)) }
+        val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+        iconView.layoutParams = lp
+        item.addView(iconView)
+        item.addView(labelTv)
+        return item
+    }
 }
 
 @Suppress("ktlint:standard:function-naming")
@@ -1169,3 +1533,302 @@ private fun Err(
             }
         }
     }
+
+@Suppress("ktlint:standard:function-naming")
+@Composable
+private fun CommentItem(
+    id: Int, nickname: String, text: String,
+    replyToUserName: String?,
+    showTime: String, likeCount: Int, liked: Boolean,
+    replies: List<Map<String, Any>>, isExpanded: Boolean,
+    isMine: Boolean,
+    repliesMine: List<Boolean>,
+    likeCounts: MutableMap<Int, Int>, likedSet: MutableSet<Int>,
+    expandMap: MutableMap<Int, Boolean>,
+    onReply: (targetCommentId: Int, targetNickname: String, isTopLevelTarget: Boolean) -> Unit,
+    onLike: (Int, Boolean) -> Unit,
+    onToggleExpand: (Int) -> Unit,
+) {
+    val avatarSize = 40.dp
+    val avatarFont = 16.sp
+    val nameFont = 15.sp
+    val contentFont = 14.sp
+
+    // 顶级评论无缩进，所有子回复统一全局16dp缩进，永远不叠加
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Surface(shape = CircleShape, color = Color(0xFFE8F6F7), modifier = Modifier.size(avatarSize)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(nickname.first().uppercase(), color = Color.White, fontSize = avatarFont, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(nickname, fontSize = nameFont, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                    if (isMine) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF1E88E5).copy(alpha=0.12f)) {
+                            Text("我的", fontSize = 11.sp, color = Color(0xFF1A535C), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=6.dp, vertical=1.dp))
+                        }
+                    }
+                }
+                Text(text, fontSize = contentFont, color = Color(0xFF444444), lineHeight = (contentFont.value * 1.4f).sp, modifier = Modifier.padding(top = 2.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row {
+                        Text(showTime, fontSize = 12.sp, color = Color(0xFF999999))
+                        Spacer(Modifier.width(12.dp))
+                        Text("回复", fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(id, nickname, true) })
+                    }
+                    Row(Modifier.clickable { onLike(id, liked) }) {
+                        Text(if (liked) "❤️" else "🤍", fontSize = 14.sp)
+                        if (likeCount > 0) Text(" $likeCount", fontSize = 12.sp, color = if (liked) Color(0xFFE53935) else Color(0xFF999999))
+                    }
+                }
+            }
+        }
+
+        val btnText = if (isExpanded) "收起回复" else "展开${replies.size}条回复"
+
+        if (!isExpanded && replies.isNotEmpty()) {
+            Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 4.dp, start = (avatarSize + 10.dp)).clickable { onToggleExpand(id) })
+        }
+
+        // 所有子回复统一放在16dp缩进容器里，完全平级，没有任何递归叠加
+        if (isExpanded && replies.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(start = (avatarSize + 10.dp))) {
+                replies.forEachIndexed { idx, reply ->
+                    val rId = (reply["id"] as? Number)?.toInt() ?: 0
+                    val rNick = reply["nickname"] as? String ?: "热心网友"
+                    val rText = reply["text"] as? String ?: ""
+                    val rReplyToUserName = reply["reply_to_nickname"] as? String ?: ""
+                    val rCreated = reply["created_at"] as? String ?: ""
+                    val rTime = if (rCreated.length >= 5) rCreated.substring(5, 10) else rCreated
+                    val rLike = likeCounts[rId] ?: 0
+                    val rLiked = rId in likedSet
+                    val rIsMine = if(idx < repliesMine.size) repliesMine[idx] else false
+
+                    Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                            Surface(shape = CircleShape, color = Color(0xFFE3F2FD), modifier = Modifier.size(32.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(rNick, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                                    if (rIsMine) {
+                                        Spacer(Modifier.width(4.dp))
+                                        Surface(shape = RoundedCornerShape(3.dp), color = Color(0xFF1E88E5).copy(alpha=0.12f)) {
+                                            Text("我的", fontSize = 10.sp, color = Color(0xFF1A535C), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=4.dp, vertical=0.5.dp))
+                                        }
+                                    }
+                                }
+                                val displayContent = if (rReplyToUserName.isNotEmpty()) "回复 @$rReplyToUserName：$rText" else rText
+                                Text(displayContent, fontSize = 13.sp, color = Color(0xFF444444), lineHeight = (13f * 1.4f).sp, modifier = Modifier.padding(top = 2.dp))
+                                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Row {
+                                        Text(rTime, fontSize = 11.sp, color = Color(0xFF999999))
+                                        Spacer(Modifier.width(12.dp))
+                                        Text("回复", fontSize = 11.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(rId, rNick, false) })
+                                    }
+                                    Row(Modifier.clickable { onLike(rId, rLiked) }) {
+                                        Text(if (rLiked) "❤️" else "🤍", fontSize = 12.sp)
+                                        if (rLike > 0) Text(" $rLike", fontSize = 11.sp, color = if (rLiked) Color(0xFFE53935) else Color(0xFF999999))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // 收起回复按钮放在所有子回复的最后面，仅渲染一次
+                Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 6.dp).clickable { onToggleExpand(id) })
+            }
+        }
+    }
+}
+
+@Suppress("ktlint:standard:function-naming")
+@Composable
+private fun DiscussionSheet(
+    visible: Boolean,
+    episodeId: Long,
+    userId: String,
+    scope: CoroutineScope,
+    onDismiss: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    var comments by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+    var inputText by remember { mutableStateOf("") }
+    var replyTargetNick by remember { mutableStateOf("") }
+    var replyParentId by remember { mutableStateOf(0) }
+    var replyTargetIsTopLevel by remember { mutableStateOf(true) }
+    var expandMap by remember { mutableStateOf(mutableMapOf<Int, Boolean>()) }
+    val keyboardCtrl = LocalSoftwareKeyboardController.current
+    var likeCounts by remember { mutableStateOf(mutableMapOf<Int, Int>()) }
+    var likedSet by remember { mutableStateOf(mutableSetOf<Int>()) }
+
+    LaunchedEffect(episodeId, visible) {
+        if (visible && episodeId > 0) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                try { comments = RetrofitClient.api.getComments(episodeId) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(250)) + fadeIn(tween(250)),
+        exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(200)) + fadeOut(tween(200))
+    ) {
+        Column(Modifier.fillMaxSize().imePadding()) {
+            // 上方视频区域 — 点击关闭抽屉
+            Box(Modifier.fillMaxWidth().weight(0.4f).clickable { onDismiss() })
+
+            // 底部评论抽屉
+            Surface(
+                modifier = Modifier.fillMaxWidth().weight(0.6f),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                color = Color.White,
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    // 拖拽手柄 — 向下拖拽超过30%面板高度关闭
+                    var dragOffset by remember { mutableFloatStateOf(0f) }
+                    val sheetHeightPx = with(LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() * 0.6f }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp, bottom = 8.dp)
+                            .pointerInput(Unit) {
+                                detectVerticalDragGestures(
+                                    onDragEnd = {
+                                        if (dragOffset > sheetHeightPx * 0.3f) onDismiss()
+                                        dragOffset = 0f
+                                    },
+                                    onDragCancel = { dragOffset = 0f },
+                                    onVerticalDrag = { _, amount -> dragOffset += amount }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(Modifier.width(40.dp).height(4.dp).background(Color(0xFFDDDDDD), RoundedCornerShape(2.dp)))
+                    }
+                    // ---- 标题栏 ----
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val totalAll = comments.size + comments.sumOf { (it["replies"] as? List<*>)?.size ?: 0 }
+                        Text("${totalAll}条评论", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333), modifier = Modifier.weight(1f))
+                        Text("✕", fontSize = 20.sp, color = Color(0xFF999999), modifier = Modifier.clickable { onDismiss() })
+                    }
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+
+                // ---- 评论列表 ----
+                if (comments.isEmpty()) {
+                    Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("还没有评论，快来抢沙发吧~", fontSize = 14.sp, color = Color(0xFF999999))
+                    }
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f)) {
+                        items(comments.size) { idx ->
+                            val c = comments[idx]
+                            val cid = (c["id"] as? Number)?.toInt() ?: idx
+                            val commentUserId = (c["user_id"] as? String) ?: ""
+                            val nickname = c["nickname"] as? String ?: "热心网友"
+                            val text = c["text"] as? String ?: ""
+                            val created = c["created_at"] as? String ?: ""
+                            val replies = (c["replies"] as? List<Map<String, Any>>) ?: emptyList()
+                            val isExpanded = expandMap[cid] == true
+                            val likeCount = likeCounts[cid] ?: 0
+                            val liked = cid in likedSet
+                            val showTime = if (created.length >= 5) created.substring(5, 10) else created
+                            val repliesMine = replies.map { (it["user_id"] as? String ?: "") == userId }
+
+                            // 顶级评论（isTopLevel=true，不附加前缀）
+                            CommentItem(
+                                id = cid, nickname = nickname, text = text,
+                                replyToUserName = null,
+                                showTime = showTime, likeCount = likeCount, liked = liked,
+                                replies = replies, isExpanded = isExpanded,
+                                isMine = commentUserId == userId,
+                                repliesMine = repliesMine,
+                                likeCounts = likeCounts, likedSet = likedSet,
+                                expandMap = expandMap,
+                                onReply = { targetCommentId, targetNickname, isTopLevelTarget ->
+                                replyTargetNick = targetNickname
+                                replyParentId = targetCommentId
+                                replyTargetIsTopLevel = isTopLevelTarget
+                                inputText = if (isTopLevelTarget) "" else "回复 @$targetNickname："
+                                keyboardCtrl?.show()
+                            },
+                                onLike = { likeId: Int, cur: Boolean ->
+                                    if (cur) { likeCounts[likeId] = ((likeCounts[likeId] ?: 0) - 1).coerceAtLeast(0); likedSet.remove(likeId) }
+                                    else { likeCounts[likeId] = (likeCounts[likeId] ?: 0) + 1; likedSet.add(likeId) }
+                                },
+                                onToggleExpand = { expandId: Int ->
+                                    expandMap = expandMap.toMutableMap().also { it[expandId] = !(it[expandId] == true) }
+                                },
+                            )
+                            // 分割线
+                            if (idx != comments.size - 1) {
+                                Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)).padding(start = 16.dp, end = 16.dp))
+                            }
+                        }
+                    }
+                }
+
+                // ---- 底部输入栏 ----
+                Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+                Row(
+                    Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        modifier = Modifier.weight(1f).height(36.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp),
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp),
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (inputText.isEmpty()) Text("有趣评论千千万，不如你也来一条？", fontSize = 14.sp, color = Color(0xFFBBBBBB))
+                                inner()
+                            }
+                        }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("发布", fontSize = 14.sp, color = if (inputText.trim().isNotEmpty()) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = inputText.trim().isNotEmpty()) {
+                        val pureText = if (!replyTargetIsTopLevel && inputText.startsWith("回复 @")) {
+                            val colonIdx = inputText.indexOf("：")
+                            if (colonIdx > 0) inputText.substring(colonIdx + 1).trim() else inputText.trim()
+                        } else inputText.trim()
+                        if (pureText.isEmpty()) return@clickable
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                RetrofitClient.api.postComment(episodeId, mapOf(
+                                    "user_id" to com.qingmo.app.data.auth.TokenManager.getUserId().toString(),
+                                    "text" to pureText,
+                                    "parent_id" to replyParentId,
+                                    "reply_to_nickname" to if (replyTargetIsTopLevel) "" else replyTargetNick
+                                ))
+                                comments = RetrofitClient.api.getComments(episodeId)
+                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    inputText = ""; replyTargetNick = ""; replyParentId = 0; replyTargetIsTopLevel = true
+                                    keyboardCtrl?.hide()
+                                    android.widget.Toast.makeText(ctx, "发送成功", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (_: Exception) {
+                                kotlinx.coroutines.withContext(Dispatchers.Main) { android.widget.Toast.makeText(ctx, "发送失败", android.widget.Toast.LENGTH_SHORT).show() }
+                            }
+                        }
+                    })
+                }
+            }
+        }
+    }
+}
+
+}

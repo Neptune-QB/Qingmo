@@ -37,6 +37,7 @@ import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceMuted
 import com.qingmo.app.ui.theme.Primary
 import com.qingmo.app.ui.theme.OnPrimary
+import com.qingmo.app.xiaomo.XiaoMoPose
 
 /**
  * 小墨 Expanded 状态 — 完整形象 + 互动面板
@@ -53,6 +54,7 @@ fun XiaoMoPanelView(
     onClose: () -> Unit,
     children: @Composable (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    pose: XiaoMoPose = XiaoMoPose.Idle,
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -108,7 +110,7 @@ fun XiaoMoPanelView(
 
                 // 小墨形象居中
                 Image(
-                    painter = painterResource(id = R.drawable.xiaomo_peek),
+                    painter = painterResource(id = pose.resId),
                     contentDescription = "小墨",
                     modifier = Modifier
                         .size(80.dp)

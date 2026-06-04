@@ -2,6 +2,8 @@ package com.qingmo.app.data.api
 
 import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
+import com.qingmo.app.data.auth.TokenManager
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -11,16 +13,39 @@ import java.util.concurrent.TimeUnit
 object RetrofitClient {
     const val BASE_URL = "http://127.0.0.1:8000/"
 
-    private val client =
+    /** 鉴权拦截器：自动为所有请求添加 Bearer Token */
+    private val authInterceptor = Interceptor { chain ->
+        val original = chain.request()
+        val token = TokenManager.getToken()
+        if (token != null) {
+            val request = original.newBuilder()
+                .header("Authorization", "Bearer $token")
+                .build()
+            chain.proceed(request)
+        } else {
+            chain.proceed(original)
+        }
+    }
+
+    val okHttpClient: OkHttpClient by lazy {
         OkHttpClient
             .Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .addInterceptor(authInterceptor)
+            .addInterceptor { chain ->
+                val req = chain.request().newBuilder()
+                    .header("Connection", "close")
+                    .build()
+                chain.proceed(req)
+            }
             .addInterceptor(
                 HttpLoggingInterceptor().apply {
                     level = HttpLoggingInterceptor.Level.BODY
                 },
             ).build()
+    }
 
     val api: ApiService by lazy {
         val gson =
@@ -30,7 +55,7 @@ object RetrofitClient {
         Retrofit
             .Builder()
             .baseUrl(BASE_URL)
-            .client(client)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(ApiService::class.java)
@@ -41,6 +66,6 @@ object RetrofitClient {
         if (path.startsWith("http://") || path.startsWith("https://")) {
             return path
         }
-        return BASE_URL + path.trimStart('/')
+        return "http://127.0.0.1:8000/" + path.trimStart('/')
     }
 }
