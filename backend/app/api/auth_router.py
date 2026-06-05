@@ -48,6 +48,18 @@ def get_current_user(authorization: str = Header(default="")) -> dict:
     return user
 
 
+def get_optional_user(authorization: str = Header(default="")) -> Optional[dict]:
+    """可选的用户鉴权：有 Token 则解析，无则返回 None 不报错"""
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    payload = verify_token(token)
+    if payload is None:
+        return None
+    user_id = int(payload["sub"])
+    return get_user_by_id(user_id)
+
+
 # ===== 接口 =====
 @router.post("/register")
 def register(req: RegisterRequest):

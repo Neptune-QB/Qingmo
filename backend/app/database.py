@@ -60,11 +60,12 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS user_progress (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '0',
             episode_id INTEGER NOT NULL,
             progress INTEGER DEFAULT 0,
             watched INTEGER DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(episode_id)
+            UNIQUE(user_id, episode_id)
         );
 
         CREATE TABLE IF NOT EXISTS user_interactions (
@@ -170,6 +171,7 @@ def init_db():
             episode_id INTEGER NOT NULL,
             parent_id INTEGER DEFAULT 0,
             reply_to_user_id TEXT DEFAULT '',
+            reply_to_nickname TEXT DEFAULT '',
             user_id TEXT NOT NULL,
             nickname TEXT DEFAULT '热心网友',
             avatar_url TEXT DEFAULT '',
@@ -260,27 +262,18 @@ def migrate_add_columns():
             )
         """)
 
-    # episode_comments_new 新评论表 + 楼中楼字段安全迁移
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS episode_comments_new(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            episode_id INTEGER NOT NULL,
-            user_id TEXT NOT NULL,
-            nickname TEXT NOT NULL,
-            text TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            parent_id INTEGER DEFAULT 0,
-            reply_to_nickname TEXT DEFAULT ''
-        )
-    """)
-    for col in ["parent_id", "reply_to_nickname"]:
+    # episode_comments 评论表 reply_to_nickname 字段安全迁移
+    for col, col_type in [("reply_to_nickname", "TEXT DEFAULT ''"), ("parent_id", "INTEGER DEFAULT 0")]:
         try:
-            if col == "parent_id":
-                cursor.execute(f"ALTER TABLE episode_comments_new ADD COLUMN {col} INTEGER DEFAULT 0")
-            else:
-                cursor.execute(f"ALTER TABLE episode_comments_new ADD COLUMN {col} TEXT DEFAULT ''")
+            cursor.execute(f"ALTER TABLE episode_comments ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass
+
+    # user_progress 表 user_id 字段安全迁移（支持多用户进度隔离）
+    try:
+        cursor.execute("ALTER TABLE user_progress ADD COLUMN user_id TEXT NOT NULL DEFAULT '0'")
+    except sqlite3.OperationalError:
+        pass
 
     conn.commit()
     conn.close()

@@ -107,11 +107,21 @@ class UserProfileUpdate(BaseModel):
 
 
 # ===== Agent 模块 Schema =====
+class PageContext(BaseModel):
+    page_type: str = Field(default="home", description="当前页面类型: home/drama_list/playback/comment/profile")
+    drama_id: int = Field(default=0, description="当前所在剧集ID")
+    episode_id: int = Field(default=0, description="当前所在集数ID")
+    episode_num: int = Field(default=0, description="当前集数号")
+    playback_progress: float = Field(default=0.0, description="当前播放时间秒")
+    drama_title: str = Field(default="", description="当前剧集标题")
+
+
 class AgentChatRequest(BaseModel):
     user_id: str = Field(..., description="设备/用户唯一标识")
     message: str = Field(..., description="用户输入消息")
     context: Optional[Dict[str, Any]] = Field(default=None, description="当前观剧上下文")
     history: Optional[List[Dict[str, str]]] = Field(default=None, description="历史对话")
+    page_context: Optional[PageContext] = Field(default=None, description="当前页面上下文感知信息")
 
 
 class StoryExtensionRequest(BaseModel):
@@ -146,7 +156,7 @@ class ChatMessageItem(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-    user_id: str
+    user_id: str = ""
     drama_id: int = 0
     title: str = "新对话"
 

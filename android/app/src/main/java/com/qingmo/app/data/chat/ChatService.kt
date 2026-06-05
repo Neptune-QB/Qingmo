@@ -133,4 +133,33 @@ object ChatService {
             "续写失败：${e.message}"
         }
     }
+
+    /** 用 AI 总结首条消息为10字以内标题 */
+    suspend fun summarizeTitle(firstMessage: String): String {
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = org.json.JSONObject().apply {
+                    put("message", "用10个字以内的简洁短语总结以下对话的主题，只返回总结文字不要解释：$firstMessage")
+                    put("context", org.json.JSONObject())
+                }
+                val request = Request.Builder()
+                    .url("${RetrofitClient.BASE_URL}api/v1/agent/chat")
+                    .post(body.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val text = response.body?.string() ?: ""
+                response.close()
+                // 流式返回最后一条完整消息
+                val lines = text.lines().filter { it.startsWith("data:") && it.length > 6 }
+                val full = lines.joinToString("") { it.removePrefix("data:").trim() }
+                full.trim().take(10)
+            } catch (_: Exception) { "" }
+        }
+    }
 }

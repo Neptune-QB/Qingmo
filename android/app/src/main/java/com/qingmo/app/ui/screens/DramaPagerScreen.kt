@@ -60,12 +60,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.unit.dp
@@ -168,6 +172,7 @@ private fun Pager(
     onGoDetail: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current.density
     val dpx: (Float) -> Int = { (it * density + 0.5f).toInt() }
     val sorted = remember(detail.episodes) { detail.episodes.sortedBy { it.episodeNum } }
@@ -237,13 +242,13 @@ private fun Pager(
                     }
                 }
                 it.onLikeClick = { episodeId ->
-                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                    coroutineScope.launch(Dispatchers.IO) {
                         try { RetrofitClient.api.toggleLike(episodeId, mapOf("user_id" to userId)) }
                         catch (_: Exception) {}
                     }
                 }
                 it.onFavoriteClick = { dramaId ->
-                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                    coroutineScope.launch(Dispatchers.IO) {
                         try { RetrofitClient.api.toggleFavorite(dramaId.toInt(), mapOf("user_id" to userId)) }
                         catch (_: Exception) {}
                     }
@@ -421,7 +426,7 @@ private fun Pager(
                     val item = DanmakuItem(id = System.currentTimeMillis(), text = text, timeSec = nowSec, color = AndroidColor.WHITE, userId = userId)
                     adapter.addDanmakuToCurrent(ep.episodeId, item, forceEmit = true)
                     danmakuSentText = "弹幕已发送"
-                    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                    coroutineScope.launch(Dispatchers.IO) {
                         try {
                             RetrofitClient.api.postDanmaku(mapOf("user_id" to userId, "episode_id" to ep.episodeId, "text" to text, "time_sec" to nowSec))
                         } catch (_: Exception) { }
@@ -546,6 +551,7 @@ private class NativeAdapter(
         val danmakuBtn: ImageView,
         val seekBar: SeekBar,
         val timeLabel: TextView,
+        val peekLabel: TextView,
         val topBar: View,
         val rightBar: View,
         val bottomInfo: View,
@@ -800,7 +806,22 @@ private class NativeAdapter(
                         ).apply { setMargins(0, 0, 0, dp(78f)) }
             }
         r.addView(timeLabel)
-        val seekBar = SeekBar(c, timeLabel)
+        val peekLabel =
+            makeTv("", 13f, 0xFFFFFFFF.toInt(), true).apply {
+                visibility = View.GONE
+                gravity = Gravity.CENTER
+                setBackgroundColor(0xCC1A535C.toInt())
+                setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+                layoutParams =
+                    FrameLayout
+                        .LayoutParams(
+                            -2,
+                            -2,
+                            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                        ).apply { setMargins(0, 0, 0, dp(100f)) }
+            }
+        r.addView(peekLabel)
+        val seekBar = SeekBar(c, timeLabel, peekLabel)
         seekBar.layoutParams =
             FrameLayout.LayoutParams(-1, dp(24f), Gravity.BOTTOM).apply { setMargins(dp(20f), 0, dp(20f), dp(40f)) }
         r.addView(seekBar)
@@ -851,7 +872,7 @@ private class NativeAdapter(
                 layoutParams = LinearLayout.LayoutParams(dp(28f), dp(28f))
             }
         bottomBar.addView(fsBtn)
-        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel)
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel)
     }
 
     override fun onBindViewHolder(
@@ -907,6 +928,14 @@ private class NativeAdapter(
                 h.danmakuView.post { h.danmakuView.setDanmakuData(items) }
             }
         }
+        // 加载该集高光点 → 进度条画青色标记点
+        scope.launch(Dispatchers.IO) {
+            try {
+                val episodeWrap = RetrofitClient.api.getEpisode(ep.episodeId)
+                val highlightList = episodeWrap.highlights
+                h.seekBar.post { h.seekBar.setHighlights(highlightList) }
+            } catch (_: Exception) {}
+        }
         // 点击 100%真实addView顺序：0=收藏 1=评论 2=点赞 3=分享
         val rg = h.rightBar as ViewGroup
         // 收藏按钮
@@ -927,6 +956,8 @@ private class NativeAdapter(
             players[pos] ?: run {
                 val sp = ProgressCache.get(ep.episodeId)
                 // 本地即时生成视频URL，完全消除等待后端playback接口的网络RoundTrip，实现秒加载
+                // TODO: dramaId=1 的视频文件名从 63.mp4 起始，与 episodeNum 存在偏移量
+                //       后续统一改为后端 playback API 返回 videoUrl 消除此硬编码
                 val localVideoUrl = when (detail.id) {
                     1 -> "videos/1/${63 + ep.episodeNum - 1}.mp4"
                     else -> "videos/${detail.id}/${ep.episodeNum}.mp4"
@@ -1159,10 +1190,12 @@ private class NativeAdapter(
     inner class SeekBar(
         context: Context,
         private val timeLabel: TextView,
+        private val peekLabel: TextView,
     ) : View(context) {
         private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x20FFFFFF.toInt() }
         private val progressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x60FFFFFF.toInt() }
         private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xB3FFFFFF.toInt() }
+        private val highlightDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4ECDC4.toInt() }
         private var progress = 0f
         private var totalDuration = 0L
         private var isDragging = false
@@ -1171,9 +1204,16 @@ private class NativeAdapter(
         var onSeek: ((Long) -> Unit)? = null
         var onDragChange: ((Boolean) -> Unit)? = null
         private var seekPlayer: ExoPlayer? = null
+        private var highlights: List<com.qingmo.app.data.model.HighlightItem> = emptyList()
+        private var longPressJob: kotlinx.coroutines.Job? = null
 
         fun setPlayer(p: ExoPlayer?) {
             seekPlayer = p
+        }
+
+        fun setHighlights(list: List<com.qingmo.app.data.model.HighlightItem>) {
+            highlights = list
+            postInvalidate()
         }
 
         fun setProgress(
@@ -1189,8 +1229,7 @@ private class NativeAdapter(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val cy =
-                height / 2f
+            val cy = height / 2f
             val w = width.toFloat()
             val th = if (isDragging) dp(4f).toFloat() else trackHeight
             val tr = if (isDragging) 0x40FFFFFF.toInt() else trackPaint.color
@@ -1204,11 +1243,8 @@ private class NativeAdapter(
                 th / 2,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tr },
             )
-            val px =
-                w * progress
-            if (px >
-                0
-            ) {
+            val px = w * progress
+            if (px > 0) {
                 canvas.drawRoundRect(
                     0f,
                     cy - th / 2,
@@ -1216,11 +1252,13 @@ private class NativeAdapter(
                     cy + th / 2,
                     th / 2,
                     th / 2,
-                    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color =
-                            pr
-                    },
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply { color = pr },
                 )
+            }
+            highlights.forEach { h ->
+                val hProgress = if (totalDuration > 0) (h.time * 1000f / totalDuration).coerceIn(0f,1f) else 0f
+                val dotX = w * hProgress
+                canvas.drawCircle(dotX, cy, dp(3.5f).toFloat(), highlightDotPaint)
             }
             canvas.drawCircle(px, cy, if (isDragging) dp(6f).toFloat() else thumbRadius, thumbPaint)
         }
@@ -1230,37 +1268,48 @@ private class NativeAdapter(
                 android.view.MotionEvent.ACTION_DOWN -> {
                     isDragging = true
                     updateProgress(event.x)
-                    timeLabel.visibility =
-                        View.VISIBLE
+                    timeLabel.visibility = View.VISIBLE
                     updateTimeLabel()
+                    peekLabel.visibility = View.GONE
+                    val downProgress = (event.x / width).coerceIn(0f, 1f)
+                    val curSec = if (totalDuration > 0) (downProgress * totalDuration / 1000f) else 0f
+                    val nearHighlight = highlights.minByOrNull { abs(it.time - curSec) }
+                    if (nearHighlight != null && abs(nearHighlight.time - curSec) < 8f) {
+                        longPressJob?.cancel()
+                        longPressJob = scope.launch {
+                            kotlinx.coroutines.delay(300L)
+                            peekLabel.text = nearHighlight.title
+                            peekLabel.visibility = View.VISIBLE
+                        }
+                    }
                     onDragChange?.invoke(true)
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
+                    longPressJob?.cancel()
+                    peekLabel.visibility = View.GONE
                     updateProgress(event.x)
                     updateTimeLabel()
                 }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    longPressJob?.cancel()
+                    peekLabel.visibility = View.GONE
                     isDragging = false
                     timeLabel.visibility = View.GONE
                     onDragChange?.invoke(false)
                     if (progress > 0.98f && totalDuration > 0) {
                         ProgressCache.markWatched(eps[cur].episodeId)
                         ProgressCache.save(eps[cur].episodeId, 0L)
-                        onEpisodeEnd(
-                            cur + 1,
-                        )
+                        onEpisodeEnd(cur + 1)
                     } else {
                         val p = seekPlayer
                         val rawPos = (progress * totalDuration).toLong()
                         val pos =
-                            if (totalDuration >
-                                2000
-                            ) {
+                            if (totalDuration > 2000) {
                                 rawPos.coerceAtMost(totalDuration - 500)
                             } else {
                                 rawPos
                             }
-                        ; p?.seekTo(pos)
+                        p?.seekTo(pos)
                         onSeek?.invoke(pos)
                     }
                 }
@@ -1594,57 +1643,89 @@ private fun CommentItem(
             Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 4.dp, start = (avatarSize + 10.dp)).clickable { onToggleExpand(id) })
         }
 
-        // 所有子回复统一放在16dp缩进容器里，完全平级，没有任何递归叠加
+        // 所有子回复统一缩进（对齐父评论文本区），完全平级，无递归叠加
         if (isExpanded && replies.isNotEmpty()) {
             Column(Modifier.fillMaxWidth().padding(start = (avatarSize + 10.dp))) {
                 replies.forEachIndexed { idx, reply ->
-                    val rId = (reply["id"] as? Number)?.toInt() ?: 0
-                    val rNick = reply["nickname"] as? String ?: "热心网友"
-                    val rText = reply["text"] as? String ?: ""
-                    val rReplyToUserName = reply["reply_to_nickname"] as? String ?: ""
-                    val rCreated = reply["created_at"] as? String ?: ""
-                    val rTime = if (rCreated.length >= 5) rCreated.substring(5, 10) else rCreated
-                    val rLike = likeCounts[rId] ?: 0
-                    val rLiked = rId in likedSet
-                    val rIsMine = if(idx < repliesMine.size) repliesMine[idx] else false
-
-                    Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                            Surface(shape = CircleShape, color = Color(0xFFE3F2FD), modifier = Modifier.size(32.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(rNick, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
-                                    if (rIsMine) {
-                                        Spacer(Modifier.width(4.dp))
-                                        Surface(shape = RoundedCornerShape(3.dp), color = Color(0xFF1E88E5).copy(alpha=0.12f)) {
-                                            Text("我的", fontSize = 10.sp, color = Color(0xFF1A535C), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=4.dp, vertical=0.5.dp))
-                                        }
-                                    }
-                                }
-                                val displayContent = if (rReplyToUserName.isNotEmpty()) "回复 @$rReplyToUserName：$rText" else rText
-                                Text(displayContent, fontSize = 13.sp, color = Color(0xFF444444), lineHeight = (13f * 1.4f).sp, modifier = Modifier.padding(top = 2.dp))
-                                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Row {
-                                        Text(rTime, fontSize = 11.sp, color = Color(0xFF999999))
-                                        Spacer(Modifier.width(12.dp))
-                                        Text("回复", fontSize = 11.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(rId, rNick, false) })
-                                    }
-                                    Row(Modifier.clickable { onLike(rId, rLiked) }) {
-                                        Text(if (rLiked) "❤️" else "🤍", fontSize = 12.sp)
-                                        if (rLike > 0) Text(" $rLike", fontSize = 11.sp, color = if (rLiked) Color(0xFFE53935) else Color(0xFF999999))
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    ReplyItem(reply, idx, repliesMine, likeCounts, likedSet, onReply, onLike)
                 }
                 // 收起回复按钮放在所有子回复的最后面，仅渲染一次
                 Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 6.dp).clickable { onToggleExpand(id) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReplyItem(
+    reply: Map<String, Any>,
+    idx: Int,
+    repliesMine: List<Boolean>,
+    likeCounts: Map<Int, Int>,
+    likedSet: Set<Int>,
+    onReply: (Int, String, Boolean) -> Unit,
+    onLike: (Int, Boolean) -> Unit,
+) {
+    val rId = (reply["id"] as? Number)?.toInt() ?: 0
+    val rNick = reply["nickname"] as? String ?: "热心网友"
+    val rText = reply["text"] as? String ?: ""
+    val rReplyToUserName = reply["reply_to_nickname"] as? String ?: ""
+    val rCreated = reply["created_at"] as? String ?: ""
+    val rTime = if (rCreated.length >= 5) rCreated.substring(5, 10) else rCreated
+    val rLike = likeCounts[rId] ?: 0
+    val rLiked = rId in likedSet
+    val rIsMine = if (idx < repliesMine.size) repliesMine[idx] else false
+    val rSubReplies = (reply["replies"] as? List<*>)?.filterIsInstance<Map<String, Any>>() ?: emptyList()
+
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Surface(shape = CircleShape, color = Color(0xFFE3F2FD), modifier = Modifier.size(32.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(rNick, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                    if (rIsMine) {
+                        Spacer(Modifier.width(4.dp))
+                        Surface(shape = RoundedCornerShape(3.dp), color = Color(0xFF1E88E5).copy(alpha = 0.12f)) {
+                            Text("我的", fontSize = 10.sp, color = Color(0xFF1A535C), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp))
+                        }
+                    }
+                }
+                val replyPrefix = if (rReplyToUserName.isNotEmpty()) "@$rReplyToUserName：" else ""
+                if (replyPrefix.isNotEmpty()) {
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = Color(0xFF1A535C))) { append(replyPrefix) }
+                            withStyle(SpanStyle(color = Color(0xFF444444))) { append(rText) }
+                        },
+                        fontSize = 13.sp, lineHeight = (13f * 1.4f).sp, modifier = Modifier.padding(top = 2.dp)
+                    )
+                } else {
+                    Text(rText, fontSize = 13.sp, color = Color(0xFF444444), lineHeight = (13f * 1.4f).sp, modifier = Modifier.padding(top = 2.dp))
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row {
+                        Text(rTime, fontSize = 11.sp, color = Color(0xFF999999))
+                        Spacer(Modifier.width(12.dp))
+                        Text("回复", fontSize = 11.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(rId, rNick, false) })
+                    }
+                    Row(Modifier.clickable { onLike(rId, rLiked) }) {
+                        Text(if (rLiked) "❤️" else "🤍", fontSize = 12.sp)
+                        if (rLike > 0) Text(" $rLike", fontSize = 11.sp, color = if (rLiked) Color(0xFFE53935) else Color(0xFF999999))
+                    }
+                }
+            }
+        }
+        // 递归渲染该回复的子回复（同层级缩进，嵌套显示在下方）
+        if (rSubReplies.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth()) {
+                rSubReplies.forEachIndexed { subIdx, subReply ->
+                    ReplyItem(subReply, subIdx, emptyList(), likeCounts, likedSet, onReply, onLike)
+                }
             }
         }
     }
@@ -1660,20 +1741,27 @@ private fun DiscussionSheet(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var comments by remember { mutableStateOf(listOf<Map<String, Any>>()) }
-    var inputText by remember { mutableStateOf("") }
-    var replyTargetNick by remember { mutableStateOf("") }
-    var replyParentId by remember { mutableStateOf(0) }
-    var replyTargetIsTopLevel by remember { mutableStateOf(true) }
-    var expandMap by remember { mutableStateOf(mutableMapOf<Int, Boolean>()) }
+    var comments by remember(episodeId) { mutableStateOf(listOf<Map<String, Any>>()) }
+    var inputText by remember(episodeId) { mutableStateOf("") }
+    var replyTargetNick by remember(episodeId) { mutableStateOf("") }
+    var replyParentId by remember(episodeId) { mutableStateOf(0) }
+    var replyTargetIsTopLevel by remember(episodeId) { mutableStateOf(true) }
+    var expandMap by remember(episodeId) { mutableStateOf(mutableMapOf<Int, Boolean>()) }
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboardCtrl = LocalSoftwareKeyboardController.current
-    var likeCounts by remember { mutableStateOf(mutableMapOf<Int, Int>()) }
-    var likedSet by remember { mutableStateOf(mutableSetOf<Int>()) }
+    var likeCounts by remember(episodeId) { mutableStateOf(mutableMapOf<Int, Int>()) }
+    var likedSet by remember(episodeId) { mutableStateOf(mutableSetOf<Int>()) }
 
     LaunchedEffect(episodeId, visible) {
         if (visible && episodeId > 0) {
+            comments = emptyList()
             kotlinx.coroutines.withContext(Dispatchers.IO) {
-                try { comments = RetrofitClient.api.getComments(episodeId) } catch (_: Exception) {}
+                try {
+                    val remoteComments = RetrofitClient.api.getComments(episodeId)
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        comments = remoteComments
+                    }
+                } catch (_: Exception) {}
             }
         }
     }
@@ -1720,7 +1808,7 @@ private fun DiscussionSheet(
                         Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        val totalAll = comments.size + comments.sumOf { (it["replies"] as? List<*>)?.size ?: 0 }
+                        val totalAll = remember(comments) { comments.size + comments.sumOf { (it["replies"] as? List<*>)?.size ?: 0 } }
                         Text("${totalAll}条评论", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333), modifier = Modifier.weight(1f))
                         Text("✕", fontSize = 20.sp, color = Color(0xFF999999), modifier = Modifier.clickable { onDismiss() })
                     }
@@ -1761,8 +1849,9 @@ private fun DiscussionSheet(
                                 replyTargetNick = targetNickname
                                 replyParentId = targetCommentId
                                 replyTargetIsTopLevel = isTopLevelTarget
-                                inputText = if (isTopLevelTarget) "" else "回复 @$targetNickname："
+                                inputText = ""
                                 keyboardCtrl?.show()
+                                focusRequester.requestFocus()
                             },
                                 onLike = { likeId: Int, cur: Boolean ->
                                     if (cur) { likeCounts[likeId] = ((likeCounts[likeId] ?: 0) - 1).coerceAtLeast(0); likedSet.remove(likeId) }
@@ -1789,22 +1878,26 @@ private fun DiscussionSheet(
                     androidx.compose.foundation.text.BasicTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f).height(36.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp),
+                        modifier = Modifier.weight(1f).height(36.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp)
+                            .focusRequester(focusRequester),
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp),
                         decorationBox = { inner ->
                             Box(contentAlignment = Alignment.CenterStart) {
-                                if (inputText.isEmpty()) Text("有趣评论千千万，不如你也来一条？", fontSize = 14.sp, color = Color(0xFFBBBBBB))
+                                if (inputText.isEmpty()) {
+                                    val hint = if (replyTargetNick.isNotEmpty())
+                                        "@$replyTargetNick："
+                                    else
+                                        "有趣评论千千万，不如你也来一条？"
+                                    Text(hint, fontSize = 14.sp, color = Color(0xFFBBBBBB), maxLines = 1)
+                                }
                                 inner()
                             }
                         }
                     )
                     Spacer(Modifier.width(8.dp))
                     Text("发布", fontSize = 14.sp, color = if (inputText.trim().isNotEmpty()) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = inputText.trim().isNotEmpty()) {
-                        val pureText = if (!replyTargetIsTopLevel && inputText.startsWith("回复 @")) {
-                            val colonIdx = inputText.indexOf("：")
-                            if (colonIdx > 0) inputText.substring(colonIdx + 1).trim() else inputText.trim()
-                        } else inputText.trim()
+                        val pureText = inputText.trim()
                         if (pureText.isEmpty()) return@clickable
                         scope.launch(Dispatchers.IO) {
                             try {
@@ -1816,6 +1909,9 @@ private fun DiscussionSheet(
                                 ))
                                 comments = RetrofitClient.api.getComments(episodeId)
                                 kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    if (replyParentId > 0) {
+                                        expandMap = expandMap.toMutableMap().also { it[replyParentId] = true }
+                                    }
                                     inputText = ""; replyTargetNick = ""; replyParentId = 0; replyTargetIsTopLevel = true
                                     keyboardCtrl?.hide()
                                     android.widget.Toast.makeText(ctx, "发送成功", android.widget.Toast.LENGTH_SHORT).show()

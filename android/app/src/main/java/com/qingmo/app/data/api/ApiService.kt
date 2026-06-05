@@ -7,6 +7,7 @@ import com.qingmo.app.data.user.UserProfile
 import com.qingmo.app.data.user.UserProfileUpdate
 import com.qingmo.app.data.user.WatchHistoryItem
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -100,4 +101,28 @@ interface ApiService {
         @Query("limit") limit: Int = 50,
         @Query("offset") offset: Int = 0,
     ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    // 小墨会话
+    @POST("api/v1/agent/sessions")
+    suspend fun createSession(@Body body: Map<String, @JvmSuppressWildcards Any>): Map<String, @JvmSuppressWildcards Any>
+
+    @GET("api/v1/agent/sessions")
+    suspend fun listSessions(@Query("user_id") userId: String = ""): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("api/v1/agent/sessions/{id}/title")
+    suspend fun updateSessionTitle(
+        @Path("id") sessionId: Int,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    @DELETE("api/v1/agent/sessions/{id}")
+    suspend fun deleteSession(@Path("id") sessionId: Int): Map<String, @JvmSuppressWildcards Any>
+
+    @GET("api/v1/agent/sessions/{id}/messages")
+    suspend fun getSessionMessages(@Path("id") sessionId: Int): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("api/v1/agent/sessions/messages/append")
+    suspend fun appendMessage(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
 }

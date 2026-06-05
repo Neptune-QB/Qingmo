@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,6 +73,8 @@ fun XiaoMoChatPanel(
     userId: String = "android-demo",
     dramaContext: Map<String, Any>? = null,
     externalMessages: androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessage>? = null,
+    sessionId: Int? = null,
+    onCreateSession: (suspend (title: String) -> Int)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val messages = externalMessages ?: remember { mutableStateListOf<ChatMessage>() }
@@ -99,7 +102,7 @@ fun XiaoMoChatPanel(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth().imePadding()) {
         // 消息列表
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -146,6 +149,13 @@ fun XiaoMoChatPanel(
                 }
 
                 scope.launch {
+                    // 新会话：先创建会话拿到 ID
+                    var effectiveSessionId = sessionId
+                    if (effectiveSessionId != null && effectiveSessionId <= 0 && onCreateSession != null) {
+                        val title = if (text.length > 10) text.take(10) + "…" else text
+                        effectiveSessionId = onCreateSession(title)
+                    }
+
                     val xiaoMoMsg = ChatMessage(
                         id = System.currentTimeMillis() + 1,
                         role = ChatMessage.Role.XiaoMo,
@@ -180,6 +190,21 @@ fun XiaoMoChatPanel(
                             messages[msgIndex] = messages[msgIndex].copy(isStreaming = false)
                             isStreaming = false
                         }
+                        // 持久化：保存用户消息和小墨回复到后端
+                        if (effectiveSessionId != null && effectiveSessionId > 0) {
+                            try {
+                                com.qingmo.app.data.api.RetrofitClient.api.appendMessage(mapOf(
+                                    "session_id" to effectiveSessionId,
+                                    "role" to "user",
+                                    "content" to text,
+                                ))
+                                com.qingmo.app.data.api.RetrofitClient.api.appendMessage(mapOf(
+                                    "session_id" to effectiveSessionId,
+                                    "role" to "assistant",
+                                    "content" to messages[msgIndex].content,
+                                ))
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
             },
@@ -202,12 +227,27 @@ private fun ChatBubble(message: ChatMessage) {
         bottomStart = if (isUser) 12.dp else 4.dp,
         bottomEnd = if (isUser) 4.dp else 12.dp,
     )
-    val alignment = if (isUser) Alignment.End else Alignment.Start
 
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-        horizontalAlignment = alignment,
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top,
     ) {
+        // 小墨头像（左侧）
+        if (!isUser) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .padding(top = 8.dp)
+                    .clip(CircleShape)
+                    .background(Primary.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("🤖", fontSize = 16.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+        }
+
         Box(
             modifier = Modifier
                 .widthIn(max = 220.dp)
@@ -221,6 +261,21 @@ private fun ChatBubble(message: ChatMessage) {
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             )
+        }
+
+        // 用户头像（右侧）
+        if (isUser) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .padding(top = 8.dp)
+                    .clip(CircleShape)
+                    .background(Primary.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("👤", fontSize = 16.sp)
+            }
         }
     }
 }

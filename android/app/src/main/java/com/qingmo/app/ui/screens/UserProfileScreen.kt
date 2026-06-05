@@ -36,6 +36,7 @@ fun UserProfileScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
