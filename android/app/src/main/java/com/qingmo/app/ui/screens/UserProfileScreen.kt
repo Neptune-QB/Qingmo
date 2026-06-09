@@ -92,6 +92,8 @@ fun UserProfileScreen(
                             val epId = (r["episode_id"] as? Number)?.toInt() ?: 0
                             val title = r["drama_title"] as? String ?: ""
                             val cover = r["cover_url"] as? String ?: ""
+                            val thumb = r["thumbnail_url"] as? String ?: ""
+                            val img = if (thumb.isNotEmpty()) thumb else cover
                             val epNum = r["episode_num"] ?: ""
                             Card(
                                 modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0 && epId > 0) onEpisodeClick(dramaId, epId) },
@@ -101,8 +103,8 @@ fun UserProfileScreen(
                             ) {
                                 Column {
                                     Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                                        if (cover.isNotEmpty()) {
-                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(cover)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        if (img.isNotEmpty()) {
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(img)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                         } else {
                                             Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
                                         }

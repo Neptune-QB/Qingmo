@@ -54,6 +54,7 @@ os.makedirs(os.path.join(MEDIA_DIR, "covers"), exist_ok=True)
 os.makedirs(os.path.join(MEDIA_DIR, "videos"), exist_ok=True)
 app.mount("/covers", StaticFiles(directory=os.path.join(MEDIA_DIR, "covers")), name="covers")
 app.mount("/videos", StaticFiles(directory=os.path.join(MEDIA_DIR, "videos")), name="videos")
+app.mount("/thumbnails", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "thumbnails")), name="thumbnails")
 
 # 直接在main.py注册这两个profile端点，完全避开router.py中遗留的导入冲突
 @app.get("/api/v2/user/profile")
