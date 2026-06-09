@@ -49,6 +49,11 @@ interface ApiService {
         @Body body: UserProfileUpdate,
     )
 
+    @POST("api/v1/user/profile")
+    suspend fun updateProfileRaw(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    )
+
     @GET("api/v1/user/watch-history")
     suspend fun getWatchHistory(
         @Query("user_id") userId: String,

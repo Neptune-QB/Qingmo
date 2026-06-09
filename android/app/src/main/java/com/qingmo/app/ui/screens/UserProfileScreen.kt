@@ -154,7 +154,7 @@ fun UserProfileScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("✓", fontSize = 20.sp, color = Primary, modifier = Modifier.clickable {
                             editingName = false; val newName = editText.trim().ifEmpty { nickname }
-                            scope.launch(Dispatchers.IO) { try { RetrofitClient.api.updateMe(mapOf("nickname" to newName, "avatar" to "")) } catch (_: Exception) {} }
+                            scope.launch(Dispatchers.IO) { try { RetrofitClient.api.updateProfileRaw(mapOf("user_id" to uid, "nickname" to newName)) } catch (_: Exception) {} }
                             displayName = newName
                         })
                         Spacer(Modifier.width(8.dp))
