@@ -3,7 +3,6 @@ package com.qingmo.app.xiaomo.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -68,7 +67,7 @@ fun XiaoMoPanelView(
         ),
         modifier = modifier,
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .width(280.dp)
                 .height(400.dp)
@@ -83,76 +82,41 @@ fun XiaoMoPanelView(
                             Border.copy(alpha = 0.3f),
                             RoundedCornerShape(20.dp),
                         ),
-                )
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                ),
         ) {
-            // 顶部标题栏
-            Box(modifier = Modifier.fillMaxWidth()) {
-                // 关闭按钮
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .size(32.dp)
-                        .background(
-                            Border.copy(alpha = 0.5f),
-                            CircleShape,
-                        ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "关闭",
-                        tint = OnSurface,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
-                // 小墨形象居中
-                Image(
-                    painter = painterResource(id = pose.resId),
-                    contentDescription = "小墨",
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .background(Background, CircleShape)
-                        .align(Alignment.Center),
+            // 关闭按钮悬浮在右上角
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 10.dp, end = 10.dp)
+                    .size(32.dp)
+                    .background(
+                        Border.copy(alpha = 0.5f),
+                        CircleShape,
+                    ),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "关闭",
+                    tint = OnSurface,
+                    modifier = Modifier.size(16.dp),
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 标题
-            Text(
-                text = title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = OnSurface,
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // 提示文字
-            Text(
-                text = "你的 AI 观剧伙伴",
-                fontSize = 12.sp,
-                color = OnSurfaceMuted,
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // 互动内容区（由各模块注入）
-            Box(
+            // 聊天界面铺满全部区域
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(
-                        Color.Transparent,
-                        RoundedCornerShape(12.dp),
-                    ),
-                contentAlignment = Alignment.Center,
+                    .matchParentSize()
+                    .padding(top = 52.dp, start = 12.dp, end = 12.dp, bottom = 12.dp),
             ) {
-                children?.invoke()
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                ) {
+                    children?.invoke()
+                }
             }
         }
     }

@@ -76,7 +76,6 @@ object ChatService {
                     close()
                     return
                 }
-                var total = 0
                 try {
                     // 逐字缓冲：取1个字符模拟逐字输出效果
                     val buf = CharArray(8)
@@ -85,14 +84,8 @@ object ChatService {
                         for (i in 0 until len) {
                             trySend(buf[i].toString())
                         }
-                        total += len
-                        if (total > 50_000) {
-                            trySend("\n\n(回复太长，小墨帮你截断啦~)")
-                            break
-                        }
                     }
-                } catch (e: Exception) {
-                    trySend("\n\n(小墨说话被打断了...)")
+                } catch (_: Exception) {
                 } finally {
                     try { reader.close() } catch (_: Exception) {}
                     response.close()

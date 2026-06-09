@@ -277,44 +277,42 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     .fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // 对话窗口 + 设置 横向两卡片
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                // 对话窗口入口
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { loadSessions(); showFullChat = true },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 ) {
-                    Card(
-                        modifier = Modifier.weight(1f).clickable { loadSessions(); showFullChat = true },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(44.dp).background(Color(0xFF1A535C), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.SmartToy, null, tint = Color.White, modifier = Modifier.size(24.dp))
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("对话窗口", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
-                                Text("与小墨 AI 畅聊剧情", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
-                            }
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(44.dp).background(Color(0xFF1A535C), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.SmartToy, null, tint = Color.White, modifier = Modifier.size(24.dp))
                         }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("对话窗口", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
+                            Text("与小墨 AI 畅聊剧情", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
+                        }
+                        Icon(Icons.Filled.ChevronRight, null, tint = Color(0xFFBBBBBB))
                     }
-                    Card(
-                        modifier = Modifier.weight(1f).clickable { showSettings = true },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(44.dp).background(Color(0xFF7C4DFF), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                                Text("\u2699\uFE0F", fontSize = 22.sp)
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("功能设置", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
-                                Text("管理小墨能力", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
-                            }
+                }
+                // 功能设置入口
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { showSettings = true },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(44.dp).background(Color(0xFF7C4DFF), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                            Text("\u2699\uFE0F", fontSize = 22.sp)
                         }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("功能设置", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
+                            Text("管理小墨能力", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
+                        }
+                        Icon(Icons.Filled.ChevronRight, null, tint = Color(0xFFBBBBBB))
                     }
                 }
             }

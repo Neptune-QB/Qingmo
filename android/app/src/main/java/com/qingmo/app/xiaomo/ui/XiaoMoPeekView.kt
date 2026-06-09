@@ -34,7 +34,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -119,19 +120,18 @@ fun XiaoMoPeekView(
                         animationSpec = tween(durationMillis = 400),
                         label = "xiaomo_pose_crossfade",
                     ) { currentPose ->
-                        Image(
-                            painter = painterResource(id = currentPose.resId),
+                        GifImage(
+                            resId = currentPose.resId,
                             contentDescription = "小墨",
-                            contentScale = ContentScale.Fit,
+                            onClick = {
+                                isPressed = true
+                                onClick()
+                                isPressed = false
+                            },
                             modifier = Modifier
                                 .size(60.dp, 80.dp)
                                 .scale(pressScale)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    isPressed = true
-                                    onClick()
-                                    isPressed = false
-                                },
+                                .clip(RoundedCornerShape(12.dp)),
                         )
                     }
                 }

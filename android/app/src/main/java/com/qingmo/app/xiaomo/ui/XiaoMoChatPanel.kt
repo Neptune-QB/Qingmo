@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -43,10 +45,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.qingmo.app.xiaomo.ui.GifImage
 import com.qingmo.app.data.chat.ChatMessage
 import com.qingmo.app.data.chat.ChatService
 import com.qingmo.app.ui.theme.Border
@@ -75,6 +81,7 @@ fun XiaoMoChatPanel(
     externalMessages: androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessage>? = null,
     sessionId: Int? = null,
     onCreateSession: (suspend (title: String) -> Int)? = null,
+    onLinkClick: ((Int) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val messages = externalMessages ?: remember { mutableStateListOf<ChatMessage>() }
@@ -82,18 +89,7 @@ fun XiaoMoChatPanel(
     var isStreaming by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    // 首次进入显示欢迎消息
-    LaunchedEffect(Unit) {
-        if (messages.isEmpty()) {
-            messages.add(
-                ChatMessage(
-                    id = 0,
-                    role = ChatMessage.Role.XiaoMo,
-                    content = "嗨！我是小墨，你的 AI 观剧伙伴~\n有什么想聊的吗？可以问我推荐短剧、讨论剧情，或者问我的看法哦！✨",
-                ),
-            )
-        }
-    }
+    // 外部传入persistentMessages已初始化欢迎消息，退出抽屉完全保留历史记录
 
     // 自动滚动到最新消息
     LaunchedEffect(messages.size) {
@@ -110,14 +106,7 @@ fun XiaoMoChatPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(messages.toList(), key = { it.id }) { msg ->
-                ChatBubble(message = msg)
-            }
-
-            // 流式输出中显示加载指示器
-            if (isStreaming) {
-                item(key = "typing") {
-                    TypingIndicator()
-                }
+                ChatBubble(message = msg, showTypingIndicator = isStreaming && msg.isStreaming && msg.content.isEmpty(), onLinkClick = onLinkClick)
             }
         }
 
@@ -215,10 +204,13 @@ fun XiaoMoChatPanel(
 
 /**
  * 单条聊天气泡
+ * 合并文字内容与打字指示器为同一个气泡
  */
 @Composable
-private fun ChatBubble(message: ChatMessage) {
+private fun ChatBubble(message: ChatMessage, showTypingIndicator: Boolean = false, onLinkClick: ((Int) -> Unit)? = null) {
     val isUser = message.role == ChatMessage.Role.User
+    val contentEmpty = message.content.isEmpty() && !showTypingIndicator
+
     val bgColor = if (isUser) Primary.copy(alpha = 0.15f) else SurfaceVariant.copy(alpha = 0.4f)
     val textColor = if (isUser) Primary else OnSurface
     val shape = RoundedCornerShape(
@@ -233,34 +225,94 @@ private fun ChatBubble(message: ChatMessage) {
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top,
     ) {
-        // 小墨头像（左侧）
+        // 小墨头像（左侧）—— 始终渲染
         if (!isUser) {
             Box(
                 modifier = Modifier
                     .size(32.dp)
                     .padding(top = 8.dp)
-                    .clip(CircleShape)
-                    .background(Primary.copy(alpha = 0.2f)),
+                    .clip(CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("🤖", fontSize = 16.sp)
+                GifImage(
+                    resId = com.qingmo.app.R.raw.xiaomo,
+                    contentDescription = "小墨",
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             Spacer(Modifier.width(8.dp))
         }
 
-        Box(
-            modifier = Modifier
-                .widthIn(max = 220.dp)
-                .clip(shape)
-                .background(bgColor)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-        ) {
-            Text(
-                text = message.content,
-                color = textColor,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-            )
+        if (!contentEmpty) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 220.dp)
+                    .clip(shape)
+                    .background(bgColor)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Column {
+                    if (message.content.isNotEmpty()) {
+                        // 匹配两种链接格式：
+                        // 1. 👉「点我立刻看《剧名》」<qingmo://play?drama_id=1>
+                        // 2. 纯链接 <qingmo://play?drama_id=1>
+                        val linkPattern = Regex("""(?:👉\s*「([^」]+)」)?<qingmo://play\?drama_id=(\d+)>""")
+                        val parts = message.content.split(linkPattern)
+                        if (parts.size > 1) {
+                            var i = 0
+                            while (i < parts.size) {
+                                if (parts[i].isNotEmpty()) {
+                                    Text(
+                                        text = parts[i],
+                                        color = textColor,
+                                        fontSize = 13.sp,
+                                        lineHeight = 18.sp,
+                                    )
+                                }
+                                i++
+                                if (i + 1 < parts.size) {
+                                    val title = parts[i]?.takeIf { it.isNotEmpty() } ?: "这部短剧"
+                                    val dramaId = parts[i + 1]  // drama_id
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(top = 4.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF1E88E5).copy(alpha = 0.1f))
+                                            .clickable { onLinkClick?.invoke(dramaId.toIntOrNull() ?: 0) }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(
+                                            text = if (title == "这部短剧") "👉「点我立刻看」" else "👉「点我立刻看《$title》」",
+                                            color = Color(0xFF1E88E5),
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                    i += 2
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = message.content,
+                                color = textColor,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                            )
+                        }
+                    }
+                    // 流式输出打字指示器直接追加在同一个气泡底部
+                    if (showTypingIndicator) {
+                        if (message.content.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        Text(
+                            text = "小墨正在输入...",
+                            color = OnSurfaceMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
         }
 
         // 用户头像（右侧）
@@ -280,25 +332,6 @@ private fun ChatBubble(message: ChatMessage) {
     }
 }
 
-/**
- * 打字指示器 — 三个点动画
- */
-@Composable
-private fun TypingIndicator() {
-    Box(
-        modifier = Modifier
-            .padding(horizontal = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(SurfaceVariant.copy(alpha = 0.4f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Text(
-            text = "小墨正在输入...",
-            color = OnSurfaceMuted,
-            fontSize = 12.sp,
-        )
-    }
-}
 
 /**
  * 底部输入栏
@@ -321,23 +354,28 @@ private fun ChatInputField(
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+            modifier = Modifier.weight(1f),
             textStyle = TextStyle(
                 color = OnSurface,
                 fontSize = 13.sp,
+                lineHeight = 20.sp,
             ),
             cursorBrush = SolidColor(Primary),
             decorationBox = { innerTextField ->
-                if (value.isEmpty()) {
-                    Text(
-                        text = "和 小墨 说点什么...",
-                        color = OnSurfaceMuted,
-                        fontSize = 13.sp,
-                    )
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "和 小墨 说点什么...",
+                            color = OnSurfaceMuted,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp,
+                        )
+                    }
+                    innerTextField()
                 }
-                innerTextField()
             },
             enabled = enabled,
+            singleLine = true,
         )
 
         Spacer(Modifier.width(4.dp))

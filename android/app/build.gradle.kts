@@ -74,6 +74,7 @@ dependencies {
 
     // Image loading
     implementation("io.coil-kt:coil-compose:2.5.0")
+    implementation("io.coil-kt:coil-gif:2.5.0")
 
     // ViewPager2
     implementation("androidx.viewpager2:viewpager2:1.0.0")

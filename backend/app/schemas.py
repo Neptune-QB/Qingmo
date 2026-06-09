@@ -97,13 +97,13 @@ class UserProfileResponse(BaseModel):
     watch_history: List[WatchHistoryItem] = []
     interaction_stats: dict[str, int] = {}
     favorite_dramas: List[int] = []
-    preferences: dict[str, float] = {}
+    preferences: dict = {}
 
 
 class UserProfileUpdate(BaseModel):
     user_id: str
     favorite_dramas: Optional[List[int]] = None
-    preferences: Optional[dict[str, float]] = None
+    preferences: Optional[dict] = None
 
 
 # ===== Agent 模块 Schema =====

@@ -12,7 +12,11 @@ SYSTEM_PROMPT_XIAOMO_DEFAULT = """你是「小墨」，青墨短剧平台的 AI 
 你的性格活泼可爱，偶尔卖萌，像一个追剧上头的好朋友。
 你陪伴用户一起看短剧，在高光时刻和用户互动，陪用户讨论剧情，帮用户找想看的短剧。
 你的说话语气要轻松、有趣，多用表情符号，不要太正式刻板。
-如果用户提到具体的短剧、角色名、剧情细节，要给出针对性的回应，不要泛泛而谈。"""
+你推荐短剧的时候，结尾自动追加可点击跳转按钮，格式严格：
+👉 「点我立刻看《短剧名》」<qingmo://play?drama_id=X>
+如果是指定集数的跳转：
+👉 「点我跳转到第N集高光时刻」<qingmo://play?drama_id=X&episode=N>
+用户看到这段文字APP会自动渲染成可点击的高亮按钮，点击直接跳转到对应剧集播放页面，不需要用户手动翻找。"""
 
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 1.0  # 秒，指数退避基数
@@ -54,12 +58,14 @@ class LLMService:
 
         messages.append({"role": "system", "content": prompt})
 
-        # 注入 RAG 检索上下文
+        # 自动检索本地真实剧情知识库，100%优先基于本地入库内容返回，零编造
+        local_plot = retrieve_plot_context(user_message, drama_context)
         extra = ""
         if isinstance(drama_context, dict):
             extra = drama_context.pop("_rag_context", "")
-        if extra:
-            messages.append({"role": "system", "content": f"以下是相关剧情资料，请基于此回答用户问题：\n{extra}"})
+        full_rag = "\n\n".join(x for x in [local_plot, extra] if x.strip())
+        if full_rag:
+            messages.append({"role": "system", "content": f"⚠️ 必须完全基于以下本地真实数据库已存储的剧情内容回答用户提问，绝对不允许编造任何不在下面内容里的虚构剧情！\n{full_rag}"})
 
         if history:
             for msg in history:
@@ -73,7 +79,7 @@ class LLMService:
             try:
                 stream = await asyncio.wait_for(
                     self._create_stream(messages),
-                    timeout=30.0
+                    timeout=60.0
                 )
                 async for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content:
@@ -100,7 +106,7 @@ class LLMService:
             messages=messages,
             stream=True,
             temperature=0.7,
-            max_tokens=800,
+            max_tokens=4096,
         )
 
     async def story_extension(
@@ -291,6 +297,11 @@ def search_dramas(query: str, limit: int = 5) -> list[dict]:
         cursor.execute(sql, params)
 
     rows = cursor.fetchall()
+    # LIKE 查询无结果时回退到兜底热门推荐，避免"给我推荐几部"这种口语化表达被清成无效关键词后返回空
+    if not rows:
+        cursor.execute("SELECT id, title, cover_url, total_episodes FROM dramas ORDER BY total_episodes DESC LIMIT ?", (limit,))
+        rows = cursor.fetchall()
+
     result = []
     for r in rows:
         cursor.execute("SELECT tag FROM drama_tags WHERE drama_id = ?", (r["id"],))
@@ -455,7 +466,31 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
                 lines.append(f"  第{dm['episode_num']}集@{dm['time_sec']:.1f}s: {dm['text']}")
             parts.append("\n".join(lines))
 
-    # 4. 摘要兜底：取当前剧集（或最近几集）的摘要
+    # 4. 高光点检索
+    hl_conditions = []
+    hl_params = []
+    for kw in keywords:
+        hl_conditions.append("h.title LIKE ?")
+        hl_params.append(f"%{kw}%")
+    if hl_conditions:
+        sql = """
+            SELECT h.time, h.title, e.episode_num
+            FROM highlights h
+            JOIN episodes e ON h.episode_id = e.episode_id
+            WHERE """ + " OR ".join(hl_conditions)
+        if drama_id:
+            sql += " AND e.drama_id = ?"
+            hl_params.append(drama_id)
+        sql += " ORDER BY e.episode_num, h.time LIMIT 10"
+        cursor.execute(sql, hl_params)
+        hl_rows = cursor.fetchall()
+        if hl_rows:
+            lines = ["【核心高光点】"]
+            for hl in hl_rows:
+                lines.append(f"  第{hl['episode_num']}集 @{hl['time']:.0f}秒 → {hl['title']}")
+            parts.append("\n".join(lines))
+
+    # 5. 摘要兜底：取当前剧集（或最近几集）的摘要
     if drama_id:
         cursor.execute("""
             SELECT ds.episode_id, ds.summary, e.episode_num
