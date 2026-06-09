@@ -593,7 +593,8 @@ private fun Pager(
             visible = xiaoMoExpanded,
             userId = userId,
             dramaContext = curEp?.let { mapOf("drama_id" to detail.id, "drama_title" to detail.title, "episode_num" to it.episodeNum) },
-            onDismiss = { xiaoMoExpanded = false; XiaoMoCore.collapse() }
+            onDismiss = { xiaoMoExpanded = false; XiaoMoCore.collapse() },
+            onAddNote = { showNoteInput = true },
         )
 
         // 弹幕输入浮层
@@ -673,15 +674,6 @@ private fun Pager(
                     .background(Color(0xFFFAF8F0).copy(alpha = alpha), RoundedCornerShape(8.dp))
                     .padding(horizontal = 20.dp, vertical = 10.dp),
             )
-        }
-        // 追剧笔记 📝 浮动按钮
-        if (!fullscreen) {
-            Box(
-                Modifier.align(Alignment.CenterEnd).padding(bottom = 320.dp, end = 12.dp)
-                    .size(40.dp).background(Color(0xFF2A2A2A).copy(alpha = 0.7f), CircleShape)
-                    .clickable { showNoteInput = true },
-                contentAlignment = Alignment.Center,
-            ) { Text("📝", fontSize = 18.sp) }
         }
     }
 
@@ -2197,6 +2189,7 @@ fun XiaoMoChatSheet(
     userId: String,
     dramaContext: Map<String, Any>?,
     onDismiss: () -> Unit,
+    onAddNote: () -> Unit = {},
 ) {
     // 全局记忆聊天消息，完全不绑定visible，退出抽屉永远不销毁聊天历史
     val persistentMessages = remember(userId) {
@@ -2358,10 +2351,19 @@ fun XiaoMoChatSheet(
                         }
                     }
                     Box(Modifier.weight(1f).fillMaxSize().padding(horizontal = 12.dp)) {
-                        if (noteList.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("还没有笔记\n播放中点击 📝 记录吧~", fontSize = 14.sp, color = Color(0xFF999999), textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
-                        } else {
-                            androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize().padding(vertical = 4.dp)) {
+                        Column(Modifier.fillMaxSize()) {
+                            // 新增笔记按钮
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF7C4DFF).copy(alpha = 0.1f),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onAddNote(); onDismiss() },
+                            ) {
+                                Text("📝 记录此刻", fontSize = 14.sp, color = Color(0xFF7C4DFF), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                            }
+                            if (noteList.isEmpty()) {
+                                Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) { Text("还没有笔记", fontSize = 14.sp, color = Color(0xFF999999)) }
+                            } else {
+                                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxSize().padding(vertical = 4.dp)) {
                                 items(noteList.size) { idx ->
                                     val n = noteList[idx]
                                     Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF8F8F8), modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
@@ -2385,6 +2387,7 @@ fun XiaoMoChatSheet(
                                 }
                             }
                         }
+                    }
                     }
                     }
                 }
