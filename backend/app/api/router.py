@@ -756,16 +756,22 @@ def get_favorites(user_id: str = Query(...)):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT uf.drama_id, d.title, d.cover_url, d.total_episodes,
-               e.episode_id as last_ep_id, e.episode_num as last_ep_num, up.progress
+               (SELECT e2.episode_id FROM user_progress up2
+                JOIN episodes e2 ON up2.episode_id = e2.episode_id
+                WHERE up2.user_id = uf.user_id AND e2.drama_id = d.id
+                ORDER BY up2.updated_at DESC LIMIT 1) as last_ep_id,
+               (SELECT e3.episode_num FROM user_progress up3
+                JOIN episodes e3 ON up3.episode_id = e3.episode_id
+                WHERE up3.user_id = uf.user_id AND e3.drama_id = d.id
+                ORDER BY up3.updated_at DESC LIMIT 1) as last_ep_num,
+               (SELECT up4.progress FROM user_progress up4
+                JOIN episodes e4 ON up4.episode_id = e4.episode_id
+                WHERE up4.user_id = uf.user_id AND e4.drama_id = d.id
+                ORDER BY up4.updated_at DESC LIMIT 1) as progress
         FROM user_favorites uf
         JOIN dramas d ON uf.drama_id = d.id
-        LEFT JOIN user_progress up ON up.user_id = uf.user_id AND up.episode_id IN (
-            SELECT e2.episode_id FROM episodes e2 WHERE e2.drama_id = d.id
-        )
-        LEFT JOIN episodes e ON up.episode_id = e.episode_id
         WHERE uf.user_id = ?
-        GROUP BY uf.drama_id
-        ORDER BY MAX(up.updated_at) DESC
+        ORDER BY uf.created_at DESC
     """, (uid,))
     result = [dict(r) for r in cursor.fetchall()]
     conn.close()
