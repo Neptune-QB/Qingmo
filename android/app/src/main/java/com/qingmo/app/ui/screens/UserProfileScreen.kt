@@ -149,8 +149,15 @@ fun UserProfileScreen(
                                         }
                                     }
                                     Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("第${epNum}集 / 共${total}集", fontSize = 10.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
+                                        Text(title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp)
+                                        val tc = r["total_episodes"] as? Number
+                                        if (tc != null && tc.toInt() > 0) {
+                                            if (currentPage == "history" && epNum != null) {
+                                                Text("第${epNum}集 / 共${tc}集", fontSize = 10.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
+                                            } else {
+                                                Text("共${tc}集", fontSize = 10.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
+                                            }
+                                        }
                                         if (currentPage == "history" && progress > 0) {
                                             LinearProgressIndicator(progress = (progress / 1000f / 60f / 100f).coerceIn(0f, 0.99f), modifier = Modifier.fillMaxWidth().height(3.dp).padding(top = 4.dp), color = Primary, trackColor = Primary.copy(alpha = 0.1f))
                                         }

@@ -755,7 +755,7 @@ def get_favorites(user_id: str = Query(...)):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT uf.drama_id, d.title, d.cover_url
+        SELECT uf.drama_id, d.title, d.cover_url, d.total_episodes
         FROM user_favorites uf
         JOIN dramas d ON uf.drama_id = d.id
         WHERE uf.user_id = ?
