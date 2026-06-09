@@ -451,28 +451,32 @@ def get_watch_history(
     user_id: str = Query(...),
     limit: int = Query(default=30, ge=1, le=100),
 ):
-    """获取用户观看历史（按时间倒序）"""
+    """获取用户观看历史（按剧集去重，每条显示最新观看的集+进度+封面）"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT up.episode_id, up.progress, up.watched,
-               e.episode_num, e.drama_id, d.title as drama_title
+        SELECT d.id as drama_id, d.title as drama_title, d.cover_url,
+               e.episode_id, e.episode_num, up.progress, up.watched,
+               d.total_episodes
         FROM user_progress up
         JOIN episodes e ON up.episode_id = e.episode_id
         JOIN dramas d ON e.drama_id = d.id
         WHERE up.user_id = ?
-        ORDER BY up.updated_at DESC
+        GROUP BY d.id
+        ORDER BY MAX(up.updated_at) DESC
         LIMIT ?
     """, (user_id, limit))
     result = [
-        WatchHistoryItem(
-            episode_id=row["episode_id"],
-            drama_id=row["drama_id"],
-            drama_title=row["drama_title"] or "",
-            episode_num=row["episode_num"],
-            progress=row["progress"],
-            watched=row["watched"],
-        )
+        {
+            "drama_id": row["drama_id"],
+            "drama_title": row["drama_title"] or "",
+            "cover_url": row["cover_url"] or "",
+            "episode_id": row["episode_id"],
+            "episode_num": row["episode_num"],
+            "progress": row["progress"],
+            "watched": row["watched"],
+            "total_episodes": row["total_episodes"] or 0,
+        }
         for row in cursor.fetchall()
     ]
     conn.close()

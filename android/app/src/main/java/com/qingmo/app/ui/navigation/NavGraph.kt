@@ -87,6 +87,7 @@ fun NavGraph(deviceId: String) {
                     }
                 },
                 onBack = { navController.popBackStack() },
+                onDramaClick = { id -> navController.navigate(Routes.detail(id)) },
             )
         }
 
