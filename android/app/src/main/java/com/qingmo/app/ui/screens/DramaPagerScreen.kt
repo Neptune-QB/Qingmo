@@ -377,18 +377,43 @@ private fun Pager(
             }, { showSpd = false })
         }
 
-        // 小墨 Peek — 右侧栏上方
+        // 小墨 Peek — 右侧栏上方 (含对话气泡)
         if (!fullscreen && showXiaoMo && !xiaoMoExpanded) {
             val xiaoMoState by XiaoMoCore.state.collectAsState()
-            XiaoMoPeekView(
-                visible = true,
-                pose = xiaoMoState.pose,
-                emotion = xiaoMoState.emotion,
-                onClick = { xiaoMoExpanded = true },
-                modifier = Modifier
+            Row(
+                Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(bottom = 240.dp),
-            )
+                    .padding(bottom = 240.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 高光点对话气泡
+                if (xiaoMoState.bubbleText.isNotEmpty()) {
+                    val bubbleAlpha by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = if (xiaoMoState.bubbleText.isNotEmpty()) 1f else 0f,
+                        animationSpec = androidx.compose.animation.core.tween(300),
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.92f * bubbleAlpha),
+                        modifier = Modifier.padding(end = 6.dp).alpha(bubbleAlpha),
+                        shadowElevation = 4.dp,
+                    ) {
+                        Text(
+                            xiaoMoState.bubbleText,
+                            fontSize = 14.sp,
+                            color = Color(0xFF333333),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            maxLines = 2,
+                        )
+                    }
+                }
+                XiaoMoPeekView(
+                    visible = true,
+                    pose = xiaoMoState.pose,
+                    emotion = xiaoMoState.emotion,
+                    onClick = { xiaoMoExpanded = true },
+                )
+            }
 
             // 一键弹幕浮层：高光点触发后，在小墨下方弹出互动面板
             val pendingHL = xiaoMoState.pendingDanmakuHighlight

@@ -30,6 +30,8 @@ data class XiaoMoStateData(
     val emotion: XiaoMoEmotion = XiaoMoEmotion.Neutral,
     /** 待一键发送弹幕的高光点，非空代表高光提示已触发 */
     val pendingDanmakuHighlight: HighlightItem? = null,
+    /** 高光点触发时的对话气泡文本 */
+    val bubbleText: String = "",
 ) {
     val isVisible: Boolean get() = state != XiaoMoState.Hidden
     val isInteracting: Boolean get() = state == XiaoMoState.Interacting

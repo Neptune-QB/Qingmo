@@ -21,22 +21,32 @@ object XiaoMoCore {
     private var _hintDismissTimer: Job? = null
 
     // ---- 高光时刻一键弹幕互动 ----
+    private val bubbleMap = mapOf(
+        "conflict" to "哇塞这也太刺激了！",
+        "twist" to "完全没想到啊！",
+        "sweet" to "磕到了磕到了🥰",
+        "funny" to "笑不活了家人们😂",
+        "famous" to "名场面来了！盯紧屏幕！",
+    )
+
     fun triggerDanmakuHint(highlight: HighlightItem) {
         _hintDismissTimer?.cancel()
+        val bubble = bubbleMap[highlight.type] ?: highlight.title
         _state.value = _state.value.copy(
             pose = XiaoMoPose.Shaking,
             pendingDanmakuHighlight = highlight,
+            bubbleText = bubble,
         )
         _hintDismissTimer = GlobalScope.launch(Dispatchers.Main) {
             delay(12000L)
             setPose(XiaoMoPose.Idle)
-            _state.value = _state.value.copy(pendingDanmakuHighlight = null)
+            _state.value = _state.value.copy(pendingDanmakuHighlight = null, bubbleText = "")
         }
     }
 
     fun onDanmakuSentSuccess() {
         _hintDismissTimer?.cancel()
-        _state.value = _state.value.copy(pose = XiaoMoPose.ThumbsUp, pendingDanmakuHighlight = null)
+        _state.value = _state.value.copy(pose = XiaoMoPose.ThumbsUp, pendingDanmakuHighlight = null, bubbleText = "")
         GlobalScope.launch(Dispatchers.Main) {
             delay(1200L)
             setPose(XiaoMoPose.Idle)
