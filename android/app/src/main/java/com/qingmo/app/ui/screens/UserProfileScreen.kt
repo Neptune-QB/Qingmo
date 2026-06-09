@@ -128,14 +128,20 @@ fun UserProfileScreen(
                         items(list.size) { idx ->
                             val r = list[idx]
                             val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
+                            val lastEpId = (r["last_ep_id"] as? Number)?.toInt()
                             val title = r["drama_title"] as? String ?: ""
                             val cover = r["cover_url"] as? String ?: ""
-                            val epNum = r["episode_num"] ?: ""
+                            val epNum = r["last_ep_num"] ?: r["episode_num"] ?: ""
                             val total = r["total_episodes"] as? Number ?: 0
                             val progress = (r["progress"] as? Number)?.toLong() ?: 0L
 
                             Card(
-                                modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0) onDramaClick(dramaId) },
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    if (dramaId > 0) {
+                                        if (lastEpId != null && lastEpId > 0) onEpisodeClick(dramaId, lastEpId)
+                                        else onDramaClick(dramaId)
+                                    }
+                                },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),

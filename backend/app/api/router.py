@@ -755,11 +755,17 @@ def get_favorites(user_id: str = Query(...)):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT uf.drama_id, d.title, d.cover_url, d.total_episodes
+        SELECT uf.drama_id, d.title, d.cover_url, d.total_episodes,
+               e.episode_id as last_ep_id, e.episode_num as last_ep_num, up.progress
         FROM user_favorites uf
         JOIN dramas d ON uf.drama_id = d.id
+        LEFT JOIN user_progress up ON up.user_id = uf.user_id AND up.episode_id IN (
+            SELECT e2.episode_id FROM episodes e2 WHERE e2.drama_id = d.id
+        )
+        LEFT JOIN episodes e ON up.episode_id = e.episode_id
         WHERE uf.user_id = ?
-        ORDER BY uf.created_at DESC
+        GROUP BY uf.drama_id
+        ORDER BY MAX(up.updated_at) DESC
     """, (uid,))
     result = [dict(r) for r in cursor.fetchall()]
     conn.close()
