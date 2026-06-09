@@ -860,6 +860,7 @@ private class NativeAdapter(
     private val triggeredSet = mutableSetOf<Int>()
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
+    private val favoritedDramaIds = mutableSetOf<Int>()
 
     fun setDanmakuEnabled(enabled: Boolean) {
         danmakuGlobalEnabled = enabled
@@ -1291,24 +1292,37 @@ private class NativeAdapter(
         }
         // 点击 100%真实addView顺序：0=收藏 1=评论 2=点赞 3=分享
         val rg = h.rightBar as ViewGroup
-        // 收藏按钮（收藏状态加载完成后才响应，先乐观更新 UI 再发 API）
+        // 收藏按钮（优先用缓存，无缓存时才请求API）
         h.favoritesLoaded = false
-        scope.launch(Dispatchers.IO) {
-            try {
-                val favList = RetrofitClient.api.getFavorites(userId)
-                val favIds = favList.mapNotNull { (it["drama_id"] as? Number)?.toInt() }
-                val isFav = detail.id.toInt() in favIds
-                h.favoriteIv.post {
-                    h.isFavorited = isFav
-                    h.favoriteIv.setImageResource(if (isFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
-                    h.favoriteLabel.text = formatCount(favList.size)
-                    h.favoritesLoaded = true
-                }
-            } catch (_: Exception) {}
+        val did = detail.id.toInt()
+        if (favoritedDramaIds.isEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val favList = RetrofitClient.api.getFavorites(userId)
+                    val favIds = favList.mapNotNull { (it["drama_id"] as? Number)?.toInt() }
+                    favoritedDramaIds.clear(); favoritedDramaIds.addAll(favIds)
+                } catch (_: Exception) {}
+            }
         }
+        val isFav = did in favoritedDramaIds
+        h.isFavorited = isFav
+        h.favoriteIv.setImageResource(if (isFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+        h.favoriteLabel.text = formatCount(favoritedDramaIds.size)
+        h.favoritesLoaded = true
         rg.getChildAt(0).setOnClickListener {
             if (!h.favoritesLoaded) return@setOnClickListener
             h.isFavorited = !h.isFavorited
+            val didLocal = detail.id.toInt()
+            if (h.isFavorited) favoritedDramaIds.add(didLocal) else favoritedDramaIds.remove(didLocal)
+            // 同步刷新所有ViewHolder的收藏图标
+            for (i in 0 until viewHolders.size()) {
+                val vh = viewHolders.valueAt(i)
+                val pos = viewHolders.keyAt(i)
+                if (pos < eps.size) {
+                    vh.isFavorited = h.isFavorited
+                    vh.favoriteIv.setImageResource(if (h.isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                }
+            }
             // 乐观更新收藏数
             val cur = h.favoriteLabel.text.toString().toIntOrNull() ?: 0
             h.favoriteLabel.text = formatCount(if (h.isFavorited) cur + 1 else cur - 1)
