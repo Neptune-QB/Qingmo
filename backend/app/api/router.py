@@ -453,9 +453,9 @@ def set_user_profile(
     cursor = conn.cursor()
     uid = user_id
     if nickname:
-        cursor.execute("UPDATE users SET nickname = ? WHERE user_id = ?", (nickname, uid))
+        cursor.execute("UPDATE users SET nickname = ? WHERE id = ?", (nickname, uid))
     if avatar:
-        cursor.execute("UPDATE users SET avatar = ? WHERE user_id = ?", (avatar, uid))
+        cursor.execute("UPDATE users SET avatar = ? WHERE id = ?", (avatar, uid))
     conn.commit()
     conn.close()
     return {"ok": True}
