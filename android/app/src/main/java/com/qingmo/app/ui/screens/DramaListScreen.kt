@@ -102,6 +102,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var showXiaoMoPage by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var showFullChat by remember { mutableStateOf(false) }
     var selectedSessionId by remember { mutableStateOf<Int?>(null) }
     var selectedSessionTitle by remember { mutableStateOf("") }
@@ -221,6 +222,11 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     ),
             )
         },
+        floatingActionButton = {
+            Box(Modifier.size(56.dp).background(Color(0xFF7C4DFF), CircleShape).clickable { showSettings = true }, contentAlignment = Alignment.Center) {
+                Text("\u2699\uFE0F", fontSize = 24.sp)
+            }
+        },
         containerColor = Background,
     ) { padding ->
         when {
@@ -239,6 +245,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     modifier = Modifier.padding(padding),
                 )
         }
+        if (showSettings) com.qingmo.app.ui.components.XiaoMoSettingsSheet { showSettings = false }
     }
 
     // 小墨功能页面
