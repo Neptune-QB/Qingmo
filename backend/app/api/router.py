@@ -1117,7 +1117,62 @@ async def trigger_highlight_bubble(
         "funny": "笑不活了家人们😂",
         "famous": "名场面来了！盯紧屏幕！"
     }
-    short_bubble = bubble_map.get(hl["type"], f"✨ 这里超精彩：{hl['title'][:10]}")
+    short_bubble = bubble_map.get(hl["type"], f"✨ {hl['title'][:12]}")
+
+    # 尝试用 LLM 生成更贴合剧情的观众吐槽
+    if llm_service.is_available:
+        import asyncio as _asyncio
+        try:
+            # 取剧情摘要做为上下文
+            cursor2 = conn.cursor()
+            cursor2.execute("SELECT summary FROM drama_summaries WHERE episode_id = ? LIMIT 1", (episode_id,))
+            summary_row = cursor2.fetchone()
+            summary = summary_row["summary"] if summary_row else ""
+            conn.close()
+        except Exception:
+            conn.close()
+        else:
+            bubble_prompt = f"""你是一个正在看短剧的真实观众，看到以下高光时刻，用一句话表达你的第一反应。
+要求：
+- 像真人观众一样说话，可以吐槽、惊讶、激动、感动
+- 8-16个字，可以加一个表情符号
+- 不要客观描述，要主观感受
+- 不要说"这一集"、"这里"等指代词汇
+
+高光时刻：{hl['title']}（类型：{hl['type']}）
+剧情背景：{summary[:200] or '暂无'}
+
+只说这一句话，不要加引号："""
+
+            async def _gen_bubble():
+                try:
+                    async with llm_service.client as client:
+                        resp = await _asyncio.wait_for(
+                            client.chat.completions.create(
+                                model=settings.DOUBAO_EP_ID,
+                                messages=[{"role": "user", "content": bubble_prompt}],
+                                stream=False, temperature=0.9, max_tokens=60,
+                            ), timeout=8.0,
+                        )
+                        text = (resp.choices[0].message.content or "").strip()
+                        if 4 <= len(text) <= 40 and not text.startswith("（"):
+                            return text
+                except Exception:
+                    pass
+                return None
+
+            # 使用线程运行异步函数
+            import threading
+            result_holder = []
+            t = threading.Thread(target=lambda: result_holder.append(_asyncio.run(_gen_bubble())), daemon=True)
+            t.start()
+            t.join(timeout=10.0)
+            if result_holder and result_holder[0]:
+                short_bubble = result_holder[0]
+            else:
+                conn = get_connection()  # 重新获取连接，之前关了
+                # 回退到静态映射，确保连接可用
+                pass
 
     return {
         "ok": True,
@@ -1126,6 +1181,44 @@ async def trigger_highlight_bubble(
         "highlight_title": hl["title"],
         "bubble_text": short_bubble
     }
+
+
+@router.get("/highlights/{highlight_id}/bubble")
+async def get_highlight_bubble(highlight_id: int):
+    """按 highlight_id 获取LLM生成的剧情吐槽气泡"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT h.title, h.type, h.episode_id FROM highlights h WHERE h.id = ?", (highlight_id,))
+    hl = cursor.fetchone()
+    if not hl:
+        conn.close()
+        raise HTTPException(status_code=404, detail="高光点不存在")
+    bubble_map = {"conflict": "哇塞这也太刺激了！","twist": "完全没想到啊！","sweet": "磕到了磕到了🥰","funny": "笑不活了家人们😂","famous": "名场面来了！盯紧屏幕！"}
+    result = bubble_map.get(hl["type"], f"✨ {hl['title'][:12]}")
+
+    if llm_service.is_available:
+        cursor.execute("SELECT summary FROM drama_summaries WHERE episode_id = ? LIMIT 1", (hl["episode_id"],))
+        summary_row = cursor.fetchone()
+        summary = summary_row["summary"] if summary_row else ""
+        conn.close()
+        import asyncio as _asyncio, threading
+        prompt = f"""你是正在看短剧的真实观众，看到这个高光时刻，用一句话表达第一反应。要求：8-16字，像真人吐槽、惊讶、激动，主观感受，不指代。\n高光：{hl['title']}（{hl['type']}）\n背景：{summary[:200] or '暂无'}\n只说这句话："""
+        async def _gen():
+            try:
+                async with llm_service.client as c:
+                    r = await _asyncio.wait_for(c.chat.completions.create(model=settings.DOUBAO_EP_ID,messages=[{"role":"user","content":prompt}],stream=False,temperature=0.9,max_tokens=60),timeout=8.0)
+                    t = (r.choices[0].message.content or "").strip()
+                    if 4 <= len(t) <= 40 and not t.startswith("（"): return t
+            except: pass
+            return None
+        holder = []
+        th = threading.Thread(target=lambda: holder.append(_asyncio.run(_gen())), daemon=True)
+        th.start()
+        th.join(timeout=10.0)
+        if holder and holder[0]: result = holder[0]
+    else:
+        conn.close()
+    return {"ok": True, "bubble_text": result}
 
 
 # ===== 剧情投票 =====

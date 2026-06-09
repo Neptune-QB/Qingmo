@@ -37,6 +37,16 @@ object XiaoMoCore {
             pendingDanmakuHighlight = highlight,
             bubbleText = bubble,
         )
+        // 异步获取 LLM 生成的剧情吐槽气泡
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val resp = com.qingmo.app.data.api.RetrofitClient.api.getHighlightBubble(highlight.id)
+                val llmBubble = resp["bubble_text"] as? String
+                if (!llmBubble.isNullOrEmpty() && llmBubble != bubble) {
+                    _state.value = _state.value.copy(bubbleText = llmBubble)
+                }
+            } catch (_: Exception) {}
+        }
         _hintDismissTimer = GlobalScope.launch(Dispatchers.Main) {
             delay(12000L)
             setPose(XiaoMoPose.Idle)

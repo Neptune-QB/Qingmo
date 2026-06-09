@@ -204,4 +204,10 @@ interface ApiService {
         @Path("dramaId") dramaId: Int,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Map<String, @JvmSuppressWildcards Any>
+
+    // 高光剧情气泡 (LLM生成)
+    @GET("api/v1/highlights/{highlightId}/bubble")
+    suspend fun getHighlightBubble(
+        @Path("highlightId") highlightId: Int,
+    ): Map<String, @JvmSuppressWildcards Any>
 }
