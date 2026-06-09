@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +46,7 @@ fun UserProfileScreen(
     var editText by remember { mutableStateOf(nickname) }
     var displayName by remember { mutableStateOf(nickname) }
     val scope = rememberCoroutineScope()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     var currentPage by remember { mutableStateOf("main") }
     var watchHistory by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
@@ -66,59 +70,75 @@ fun UserProfileScreen(
 
     LaunchedEffect(Unit) { loadData() }
 
-    // 子页面：观看历史 / 收藏 / 点赞
+    // 子页面
     if (currentPage != "main") {
         Column(Modifier.fillMaxSize().background(Background).windowInsetsPadding(WindowInsets.statusBars)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { currentPage = "main" }) { Text("← 返回", fontSize = 16.sp, color = Primary) }
                 Spacer(Modifier.width(8.dp))
-                Text(when (currentPage) { "history" -> "观看历史" else -> "我的收藏" }, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = OnSurface)
+                Text(when (currentPage) { "history" -> "观看历史"; "likes" -> "点赞记录"; "favorites" -> "我的收藏"; else -> "" }, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = OnSurface)
             }
             Box(Modifier.fillMaxWidth().height(0.5.dp).background(Border.copy(alpha = 0.2f)))
-            val list = when (currentPage) { "history" -> watchHistory else -> favList }
-            if (list.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无记录", color = OnSurfaceMuted, fontSize = 14.sp) }
-            } else {
-                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    items(list.size) { idx ->
-                        val r = list[idx]
-                        val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
-                        val title = r["drama_title"] as? String ?: ""
-                        val cover = r["cover_url"] as? String ?: ""
-                        val epNum = r["episode_num"] ?: ""
-                        val total = r["total_episodes"] as? Number ?: 0
-                        val progress = (r["progress"] as? Number)?.toLong() ?: 0L
 
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
-                                if (dramaId > 0) onDramaClick(dramaId)
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        ) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(72.dp, 96.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                                    if (cover.isNotEmpty()) {
-                                        AsyncImage(
-                                            model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current).data(cover).crossfade(true).build(),
-                                            contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                                        )
-                                    } else {
-                                        Text(title.take(2), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.5f))
+            if (currentPage == "likes") {
+                // 点赞：每集一条
+                if (likeList.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无记录", color = OnSurfaceMuted, fontSize = 14.sp) }
+                } else {
+                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        items(likeList.size) { idx ->
+                            val r = likeList[idx]
+                            val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
+                            Surface(shape = RoundedCornerShape(10.dp), color = Color.White, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable { if (dramaId > 0) onDramaClick(dramaId) }) {
+                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                                        Text("❤️", fontSize = 20.sp)
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(r["drama_title"] as? String ?: "", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("第${r["episode_num"] ?: ""}集", fontSize = 12.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
                                     }
                                 }
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text("第${epNum}集 / 共${total}集", fontSize = 12.sp, color = OnSurfaceMuted)
-                                    if (currentPage == "history" && progress > 0) {
-                                        Spacer(Modifier.height(6.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            LinearProgressIndicator(progress = (progress.toFloat() / 1000f / 60f).coerceIn(0f, 1f), modifier = Modifier.weight(1f).height(4.dp), color = Primary, trackColor = Primary.copy(alpha = 0.1f))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("${formatSec(progress / 1000)}", fontSize = 11.sp, color = OnSurfaceMuted)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 观看历史 / 收藏：剧集卡片（一部剧一条）
+                val list = if (currentPage == "history") watchHistory else favList
+                if (list.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无记录", color = OnSurfaceMuted, fontSize = 14.sp) }
+                } else {
+                    LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(list.size) { idx ->
+                            val r = list[idx]
+                            val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
+                            val title = r["drama_title"] as? String ?: ""
+                            val cover = r["cover_url"] as? String ?: ""
+                            val epNum = r["episode_num"] ?: ""
+                            val total = r["total_episodes"] as? Number ?: 0
+                            val progress = (r["progress"] as? Number)?.toLong() ?: 0L
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0) onDramaClick(dramaId) },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            ) {
+                                Column {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                                        if (cover.isNotEmpty()) {
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        } else {
+                                            Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
+                                        }
+                                    }
+                                    Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("第${epNum}集 / 共${total}集", fontSize = 10.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
+                                        if (currentPage == "history" && progress > 0) {
+                                            LinearProgressIndicator(progress = (progress / 1000f / 60f / 100f).coerceIn(0f, 0.99f), modifier = Modifier.fillMaxWidth().height(3.dp).padding(top = 4.dp), color = Primary, trackColor = Primary.copy(alpha = 0.1f))
                                         }
                                     }
                                 }
@@ -182,6 +202,7 @@ fun UserProfileScreen(
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(16.dp)).background(SurfaceVariant.copy(alpha = 0.3f)).padding(4.dp)) {
             Column {
                 ProfileMenuItem("📺 观看历史", onClick = { currentPage = "history" })
+                ProfileMenuItem("❤️ 点赞记录", onClick = { currentPage = "likes" })
                 ProfileMenuItem("⭐ 我的收藏", onClick = { currentPage = "favorites" })
                 HorizontalDivider(color = Border.copy(alpha = 0.2f), modifier = Modifier.padding(horizontal = 16.dp))
                 ProfileMenuItem("🚪 退出登录", onClick = { TokenManager.clear(); onLogout() }, textColor = OnSurfaceMuted)
@@ -189,11 +210,6 @@ fun UserProfileScreen(
         }
         Spacer(Modifier.height(32.dp))
     }
-}
-
-private fun formatSec(totalSec: Long): String {
-    val m = totalSec / 60; val s = totalSec % 60
-    return "${m}:${s.toString().padStart(2, '0')}"
 }
 
 @Composable
