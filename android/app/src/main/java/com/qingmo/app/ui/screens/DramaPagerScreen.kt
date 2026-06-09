@@ -224,6 +224,8 @@ private fun Pager(
                     if (np < sorted.size) {
                         vp2?.setCurrentItem(np, true)
                     } else {
+                        // 全剧追完，弹出分支投票
+                        showBranchVote = true
                         val di = dramas.indexOfFirst { it.id == detail.id }
                         if (di >= 0 &&
                             di + 1 < dramas.size
@@ -680,15 +682,6 @@ private fun Pager(
                     .clickable { showNoteInput = true },
                 contentAlignment = Alignment.Center,
             ) { Text("📝", fontSize = 18.sp) }
-        }
-        // 分支投票 🎬 浮动按钮
-        if (!fullscreen) {
-            Box(
-                Modifier.align(Alignment.CenterEnd).padding(bottom = 370.dp, end = 12.dp)
-                    .size(40.dp).background(Color(0xFF2A2A2A).copy(alpha = 0.7f), CircleShape)
-                    .clickable { showBranchVote = true },
-                contentAlignment = Alignment.Center,
-            ) { Text("🎬", fontSize = 18.sp) }
         }
     }
 
