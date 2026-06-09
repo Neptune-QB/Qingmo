@@ -102,7 +102,7 @@ fun UserProfileScreen(
                                 Column {
                                     Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
                                         if (cover.isNotEmpty()) {
-                                            AsyncImage(model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(cover)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                         } else {
                                             Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
                                         }
@@ -141,7 +141,7 @@ fun UserProfileScreen(
                                 Column {
                                     Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
                                         if (cover.isNotEmpty()) {
-                                            AsyncImage(model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(cover)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                         } else {
                                             Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
                                         }
