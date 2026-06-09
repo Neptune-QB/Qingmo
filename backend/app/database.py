@@ -208,6 +208,38 @@ def init_db():
             UNIQUE(user_id, highlight_id)
         );
 
+        CREATE TABLE IF NOT EXISTS user_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            episode_id INTEGER NOT NULL,
+            drama_id INTEGER NOT NULL DEFAULT 0,
+            note_text TEXT NOT NULL,
+            time_sec REAL NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS branch_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL UNIQUE,
+            question TEXT NOT NULL,
+            option_a TEXT NOT NULL,
+            option_b TEXT NOT NULL,
+            deadline TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drama_id) REFERENCES dramas(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS branch_vote_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vote_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            choice TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(vote_id, user_id),
+            FOREIGN KEY (vote_id) REFERENCES branch_votes(id)
+        );
+
         CREATE TABLE IF NOT EXISTS user_chat_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,

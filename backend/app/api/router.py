@@ -1368,3 +1368,193 @@ async def character_chat(char_id: int, user_message: str = Body(...), drama_id: 
             return {"reply": reply or f"（{char['name']}正在思考怎么回你...）"}
     except Exception:
         return {"reply": f"（{char['name']}暂时掉线了，等一下再来找他吧~）"}
+
+
+# ===== 追剧笔记 =====
+
+@router.post("/episodes/{episode_id}/notes")
+def create_note(
+    episode_id: int,
+    user_id: str = Body(...),
+    text: str = Body(...),
+    time_sec: float = Body(default=0),
+    drama_id: int = Body(default=0),
+):
+    """播放中一键标记高能时刻+吐槽"""
+    if not text.strip() or len(text) > 300:
+        raise HTTPException(status_code=400, detail="笔记 1-300 字")
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    from datetime import datetime
+    cursor.execute(
+        "INSERT INTO user_notes (user_id, episode_id, drama_id, note_text, time_sec) VALUES (?,?,?,?,?)",
+        (uid, episode_id, drama_id, text.strip(), time_sec),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return {"ok": True, "id": new_id}
+
+
+@router.get("/episodes/{episode_id}/notes")
+def get_episode_notes(episode_id: int, user_id: str = Query(...)):
+    """获取用户在某集的所有笔记"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute(
+        "SELECT id, note_text, time_sec, created_at FROM user_notes WHERE episode_id = ? AND user_id = ? ORDER BY time_sec",
+        (episode_id, uid),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"id": r["id"], "text": r["note_text"], "time_sec": r["time_sec"], "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+@router.get("/user/notes")
+def get_user_all_notes(user_id: str = Query(...), limit: int = Query(default=50, ge=1, le=200)):
+    """获取用户所有追剧笔记（跨集聚合）"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute("""
+        SELECT un.id, un.note_text, un.time_sec, un.created_at, un.episode_id, e.episode_num, d.title as drama_title
+        FROM user_notes un
+        JOIN episodes e ON un.episode_id = e.episode_id
+        JOIN dramas d ON e.drama_id = d.id
+        WHERE un.user_id = ?
+        ORDER BY un.created_at DESC
+        LIMIT ?
+    """, (uid, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"], "text": r["note_text"], "time_sec": r["time_sec"],
+            "created_at": r["created_at"], "episode_id": r["episode_id"],
+            "episode_num": r["episode_num"], "drama_title": r["drama_title"],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/user/notes/count")
+def get_user_notes_count(user_id: str = Query(...)):
+    """统计用户的追剧笔记总数"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute("SELECT COUNT(*) as cnt FROM user_notes WHERE user_id = ?", (uid,))
+    row = cursor.fetchone()
+    conn.close()
+    return {"count": row["cnt"] if row else 0}
+
+
+@router.delete("/notes/{note_id}")
+def delete_note(note_id: int):
+    """删除某条笔记"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_notes WHERE id = ?", (note_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    return {"ok": True}
+
+
+# ===== 剧情分支投票 =====
+
+@router.get("/dramas/{drama_id}/branch-vote")
+def get_branch_vote(drama_id: int, user_id: str = Query(default="")):
+    """获取剧集的分支投票题目+实时票数"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM branch_votes WHERE drama_id = ?", (drama_id,))
+    vote = cursor.fetchone()
+    if not vote:
+        conn.close()
+        return {"ok": True, "vote": None}
+
+    cursor.execute("SELECT choice, COUNT(*) as cnt FROM branch_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
+    counts = {"a": 0, "b": 0}
+    for r in cursor.fetchall():
+        counts[r["choice"]] = r["cnt"]
+    total = counts["a"] + counts["b"]
+
+    my_choice = None
+    if user_id:
+        uid = user_id
+        cursor.execute("SELECT choice FROM branch_vote_records WHERE vote_id = ? AND user_id = ?", (vote["id"], uid))
+        rec = cursor.fetchone()
+        if rec:
+            my_choice = rec["choice"]
+    conn.close()
+
+    # 检查是否过期
+    from datetime import datetime
+    expired = False
+    if vote["deadline"]:
+        try:
+            expired = datetime.now() > datetime.fromisoformat(vote["deadline"])
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "vote": {
+            "id": vote["id"],
+            "drama_id": vote["drama_id"],
+            "question": vote["question"],
+            "option_a": vote["option_a"],
+            "option_b": vote["option_b"],
+            "deadline": vote["deadline"],
+            "expired": expired,
+            "total": total,
+            "counts": counts,
+            "my_choice": my_choice,
+        },
+    }
+
+
+@router.post("/dramas/{drama_id}/branch-vote")
+def cast_branch_vote(drama_id: int, user_id: str = Body(...), choice: str = Body(...)):
+    """对分支投票进行投票"""
+    if choice not in ("a", "b"):
+        raise HTTPException(status_code=400, detail="choice 只能是 a 或 b")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, deadline FROM branch_votes WHERE drama_id = ?", (drama_id,))
+    vote = cursor.fetchone()
+    if not vote:
+        conn.close()
+        raise HTTPException(status_code=404, detail="该剧集没有分支投票")
+
+    # 检查是否过期
+    from datetime import datetime
+    if vote["deadline"]:
+        try:
+            if datetime.now() > datetime.fromisoformat(vote["deadline"]):
+                conn.close()
+                return {"ok": False, "error": "投票已截止"}
+        except Exception:
+            pass
+
+    uid = user_id
+    cursor.execute(
+        "INSERT OR REPLACE INTO branch_vote_records (vote_id, user_id, choice) VALUES (?,?,?)",
+        (vote["id"], uid, choice),
+    )
+    conn.commit()
+
+    cursor.execute("SELECT choice, COUNT(*) as cnt FROM branch_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
+    counts = {"a": 0, "b": 0}
+    for r in cursor.fetchall():
+        counts[r["choice"]] = r["cnt"]
+    conn.close()
+    return {"ok": True, "counts": counts}

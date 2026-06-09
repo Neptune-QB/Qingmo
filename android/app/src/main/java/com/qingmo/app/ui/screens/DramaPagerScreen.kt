@@ -197,6 +197,8 @@ private fun Pager(
     var showCommentInput by remember { mutableStateOf(false) }
     var showDiscussionSheetEpisodeId by remember { mutableLongStateOf(-1L) }
     var danmakuSentText by remember { mutableStateOf<String?>(null) }
+    var showNoteInput by remember { mutableStateOf(false) }
+    var showBranchVote by remember { mutableStateOf(false) }
     var vp2 by remember { mutableStateOf<ViewPager2?>(null) }
     val curEp = remember(curPage, sorted) { sorted.getOrNull(curPage) }
     val dramas = remember(allDramas) { allDramas.sortedBy { it.id } }
@@ -670,8 +672,139 @@ private fun Pager(
                     .padding(horizontal = 20.dp, vertical = 10.dp),
             )
         }
+        // 追剧笔记 📝 浮动按钮
+        if (!fullscreen) {
+            Box(
+                Modifier.align(Alignment.CenterEnd).padding(bottom = 320.dp, end = 12.dp)
+                    .size(40.dp).background(Color(0xFF2A2A2A).copy(alpha = 0.7f), CircleShape)
+                    .clickable { showNoteInput = true },
+                contentAlignment = Alignment.Center,
+            ) { Text("📝", fontSize = 18.sp) }
+        }
+        // 分支投票 🎬 浮动按钮
+        if (!fullscreen) {
+            Box(
+                Modifier.align(Alignment.CenterEnd).padding(bottom = 370.dp, end = 12.dp)
+                    .size(40.dp).background(Color(0xFF2A2A2A).copy(alpha = 0.7f), CircleShape)
+                    .clickable { showBranchVote = true },
+                contentAlignment = Alignment.Center,
+            ) { Text("🎬", fontSize = 18.sp) }
+        }
+    }
+
+    // 追剧笔记弹窗
+    if (showNoteInput) {
+        var noteText by remember { mutableStateOf("") }
+        val scope = rememberCoroutineScope()
+        val ep = curEp
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { showNoteInput = false }) {
+            Surface(Modifier.fillMaxWidth().padding(32.dp).align(Alignment.Center), shape = RoundedCornerShape(20.dp), color = Color.White) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("📝 追剧笔记", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                    if (ep != null) Text("第${ep.episodeNum}集 · ${formatSec(curPos / 1000)}", fontSize = 12.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 4.dp))
+                    Spacer(Modifier.height(12.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = noteText,
+                        onValueChange = { if (it.length <= 300) noteText = it },
+                        modifier = Modifier.fillMaxWidth().height(100.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp)).padding(12.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp),
+                        decorationBox = { inner ->
+                            Box { if (noteText.isEmpty()) Text("记下此刻的想法...", color = Color(0xFFBBBBBB), fontSize = 14.sp); inner() }
+                        },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { showNoteInput = false }) { Text("取消", color = Color(0xFF999999)) }
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            if (noteText.trim().isEmpty() || ep == null) return@TextButton
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    RetrofitClient.api.createNote(ep.episodeId, mapOf(
+                                        "user_id" to userId, "text" to noteText.trim(),
+                                        "time_sec" to (curPos / 1000.0), "drama_id" to detail.id,
+                                    ))
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                        showNoteInput = false; noteText = ""
+                                        Toast.makeText(ctx, "笔记已保存", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (_: Exception) {
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) { Toast.makeText(ctx, "保存失败", Toast.LENGTH_SHORT).show() }
+                                }
+                            }
+                        }, enabled = noteText.trim().isNotEmpty()) {
+                            Text("保存", color = Color(0xFF1E88E5), fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 分支投票弹窗
+    if (showBranchVote) {
+        var bvData by remember { mutableStateOf<Map<String, Any>?>(null) }
+        var bvCounts by remember { mutableStateOf(mapOf("a" to 0, "b" to 0)) }
+        var bvChoice by remember { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(showBranchVote) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                try {
+                    val v = RetrofitClient.api.getBranchVote(detail.id.toInt(), userId)
+                    bvData = v["vote"] as? Map<String, Any>
+                    bvCounts = ((v["vote"] as? Map<String, Any>)?.get("counts") as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { (it.value as? Number)?.toInt() ?: 0 } ?: mapOf("a" to 0, "b" to 0)
+                    bvChoice = (v["vote"] as? Map<String, Any>)?.get("my_choice") as? String
+                } catch (_: Exception) { showBranchVote = false }
+            }
+        }
+        val bd = bvData
+        if (bd != null) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { showBranchVote = false }) {
+                Surface(Modifier.fillMaxWidth().padding(32.dp).align(Alignment.Center), shape = RoundedCornerShape(20.dp), color = Color.White) {
+                    Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("🎬 剧情分支投票", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                        Spacer(Modifier.height(8.dp))
+                        Text(bd["question"] as? String ?: "", fontSize = 14.sp, color = Color(0xFF555555), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Spacer(Modifier.height(16.dp))
+                        val total = (bvCounts["a"] ?: 0) + (bvCounts["b"] ?: 0)
+                        listOf("a" to (bd["option_a"] as? String ?: "A"), "b" to (bd["option_b"] as? String ?: "B")).forEach { (key, label) ->
+                            val count = bvCounts[key] ?: 0
+                            val pct = if (total > 0) (count.toFloat() / total * 100).toInt() else 0
+                            val isMy = bvChoice == key
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isMy) Color(0xFF7C4DFF).copy(alpha = 0.15f) else Color(0xFFF5F5F5),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    .clickable(enabled = bvChoice == null && !(bd["expired"] as? Boolean ?: false)) {
+                                        bvChoice = key
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val resp = RetrofitClient.api.castBranchVote(detail.id.toInt(), mapOf("user_id" to userId, "choice" to key))
+                                                val nc = resp["counts"] as? Map<*, *>
+                                                if (nc != null) bvCounts = nc.mapKeys { it.key.toString() }.mapValues { (it.value as? Number)?.toInt() ?: 0 }
+                                            } catch (_: Exception) {}
+                                        }
+                                    },
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333))
+                                    if (bvChoice != null) Text("$pct% (${count}票)", fontSize = 12.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
+                                }
+                            }
+                        }
+                        if (bd["expired"] as? Boolean ?: false) {
+                            Spacer(Modifier.height(8.dp)); Text("投票已截止", fontSize = 12.sp, color = Color(0xFFE53935))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { showBranchVote = false }) { Text("关闭", color = Color(0xFF999999)) }
+                    }
+                }
+            }
+        }
     }
 }
+
+private fun formatSec(s: Long): String = "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
 
 private fun formatCount(n: Int): String = when {
     n >= 10000 -> "${n / 10000}.${(n % 10000) / 1000}w"

@@ -167,4 +167,41 @@ interface ApiService {
         @Path("charId") charId: Int,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Map<String, @JvmSuppressWildcards Any>
+
+    // 追剧笔记
+    @POST("api/v1/episodes/{episodeId}/notes")
+    suspend fun createNote(
+        @Path("episodeId") episodeId: Long,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    @GET("api/v1/episodes/{episodeId}/notes")
+    suspend fun getEpisodeNotes(
+        @Path("episodeId") episodeId: Long,
+        @Query("user_id") userId: String,
+    ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @GET("api/v1/user/notes")
+    suspend fun getAllNotes(
+        @Query("user_id") userId: String,
+        @Query("limit") limit: Int = 50,
+    ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @DELETE("api/v1/notes/{noteId}")
+    suspend fun deleteNote(
+        @Path("noteId") noteId: Int,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // 剧情分支投票
+    @GET("api/v1/dramas/{dramaId}/branch-vote")
+    suspend fun getBranchVote(
+        @Path("dramaId") dramaId: Int,
+        @Query("user_id") userId: String = "",
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    @POST("api/v1/dramas/{dramaId}/branch-vote")
+    suspend fun castBranchVote(
+        @Path("dramaId") dramaId: Int,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
 }
