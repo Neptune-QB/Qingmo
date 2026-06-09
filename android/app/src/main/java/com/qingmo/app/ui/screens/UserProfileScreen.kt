@@ -37,6 +37,7 @@ fun UserProfileScreen(
     onLogout: () -> Unit,
     onBack: () -> Unit,
     onDramaClick: (Int) -> Unit = {},
+    onEpisodeClick: (dramaId: Int, episodeId: Int) -> Unit = { _, _ -> },
 ) {
     val nickname = TokenManager.getNickname() ?: "未登录"
     val username = TokenManager.getUsername() ?: ""
@@ -88,11 +89,12 @@ fun UserProfileScreen(
                         items(likeList.size) { idx ->
                             val r = likeList[idx]
                             val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
+                            val epId = (r["episode_id"] as? Number)?.toInt() ?: 0
                             val title = r["drama_title"] as? String ?: ""
                             val cover = r["cover_url"] as? String ?: ""
                             val epNum = r["episode_num"] ?: ""
                             Card(
-                                modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0) onDramaClick(dramaId) },
+                                modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0 && epId > 0) onEpisodeClick(dramaId, epId) },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -107,7 +109,7 @@ fun UserProfileScreen(
                                     }
                                     Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                                         Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("❤️ 第${epNum}集", fontSize = 10.sp, color = Color(0xFFE53935), modifier = Modifier.padding(top = 2.dp))
+                                        Text("第${epNum}集", fontSize = 10.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
                                     }
                                 }
                             }
