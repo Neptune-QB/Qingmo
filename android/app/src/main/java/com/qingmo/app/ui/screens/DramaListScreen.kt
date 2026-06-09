@@ -241,7 +241,35 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                 )
         }
     }
-    if (showSettings) com.qingmo.app.ui.components.XiaoMoSettingsSheet { showSettings = false }
+    if (showSettings) {
+        Box(Modifier.fillMaxSize().background(Color(0xFFF7F3EC)).windowInsetsPadding(WindowInsets.statusBars).zIndex(99f)) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { showSettings = false }) { Icon(Icons.Filled.Close, "返回", tint = Color(0xFF333333)) }
+                    Spacer(Modifier.width(4.dp))
+                    Text("⚙ 功能设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                }
+                Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+                // 直接渲染设置列表
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                    items(com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size) { idx ->
+                        val feat = com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES[idx]
+                        val key = feat.first; val label = feat.second
+                        var enabled by remember { mutableStateOf(com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled(key)) }
+                        Row(Modifier.fillMaxWidth().height(52.dp).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(label, fontSize = 15.sp, color = Color(0xFF333333))
+                            androidx.compose.material3.Switch(checked = enabled, onCheckedChange = { v -> enabled = v; com.qingmo.app.xiaomo.XiaoMoSettings.setEnabled(key, v) })
+                        }
+                        if (idx < com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size - 1) Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFF0F0F0)))
+                    }
+                    item {
+                        Spacer(Modifier.height(20.dp))
+                        Text("恢复默认设置", fontSize = 14.sp, color = Color(0xFF999999), modifier = Modifier.clickable { com.qingmo.app.xiaomo.XiaoMoSettings.resetAll(); showSettings = false; showSettings = true }.padding(8.dp))
+                    }
+                }
+            }
+        }
+    }
 
     // 小墨功能页面
     if (showXiaoMoPage) {
