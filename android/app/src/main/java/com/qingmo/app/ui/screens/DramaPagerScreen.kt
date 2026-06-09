@@ -199,6 +199,7 @@ private fun Pager(
     var danmakuSentText by remember { mutableStateOf<String?>(null) }
     var showNoteInput by remember { mutableStateOf(false) }
     var showBranchVote by remember { mutableStateOf(false) }
+    var showCharacterChat by remember { mutableStateOf(false) }
     var vp2 by remember { mutableStateOf<ViewPager2?>(null) }
     val curEp = remember(curPage, sorted) { sorted.getOrNull(curPage) }
     val dramas = remember(allDramas) { allDramas.sortedBy { it.id } }
@@ -690,6 +691,15 @@ private fun Pager(
                 contentAlignment = Alignment.Center,
             ) { Text("🎬", fontSize = 18.sp) }
         }
+        // 角色聊天浮动按钮
+        if (!fullscreen) {
+            Box(
+                Modifier.align(Alignment.CenterEnd).padding(bottom = 420.dp, end = 12.dp)
+                    .size(40.dp).background(Color(0xFF7C4DFF).copy(alpha = 0.8f), CircleShape)
+                    .clickable { showCharacterChat = true },
+                contentAlignment = Alignment.Center,
+            ) { Text("🎭", fontSize = 18.sp) }
+        }
     }
 
     // 追剧笔记弹窗
@@ -797,6 +807,77 @@ private fun Pager(
                         }
                         Spacer(Modifier.height(8.dp))
                         TextButton(onClick = { showBranchVote = false }) { Text("关闭", color = Color(0xFF999999)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // 角色AI对话 (inline)
+    if (showCharacterChat) {
+        var charList by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
+        var selChar by remember { mutableStateOf<Map<String, Any>?>(null) }
+        var charInput by remember { mutableStateOf("") }
+        var charMsgs by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+        var charLoading by remember { mutableStateOf(false) }
+        val charScope = rememberCoroutineScope()
+        LaunchedEffect(detail.id) {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                try { charList = RetrofitClient.api.listCharacters(detail.id.toInt()) } catch (_: Exception) {}
+            }
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).clickable { if (selChar == null) showCharacterChat = false }) {
+            Surface(Modifier.fillMaxWidth().fillMaxHeight(0.75f).align(Alignment.BottomCenter), shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp), color = Color.White) {
+                Column(Modifier.fillMaxSize().imePadding()) {
+                    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(if (selChar != null) "💬 ${(selChar!!["name"] ?: "")}" else "🎭 选择角色", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        TextButton(onClick = { if (selChar != null) selChar = null else showCharacterChat = false }) {
+                            Text(if (selChar != null) "返回" else "关闭", color = Color(0xFF999999))
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+                    if (selChar != null) {
+                        val c = selChar!!
+                        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), reverseLayout = true) {
+                            val rev = charMsgs.reversed()
+                            items(rev.size) { idx -> val msg = rev[idx]; val isUser = msg.first == "user"
+                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
+                                    Surface(shape = RoundedCornerShape(12.dp), color = if (isUser) Color(0xFF1E88E5) else Color(0xFFF0F0F0)) {
+                                        androidx.compose.material3.Text(msg.second, fontSize = 14.sp, color = if (isUser) Color.White else Color(0xFF333333), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                                    }
+                                }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(12.dp).background(Color.White), verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.foundation.text.BasicTextField(value = charInput, onValueChange = { charInput = it }, modifier = Modifier.weight(1f).height(40.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp), textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp), decorationBox = { ib -> Box(contentAlignment = Alignment.CenterStart) { if (charInput.isEmpty()) Text("和${c["name"]}说点什么...", color = Color(0xFFBBBBBB), fontSize = 14.sp); ib() } })
+                            Spacer(Modifier.width(8.dp))
+                            Text("发送", color = if (charInput.isNotBlank() && !charLoading) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = charInput.isNotBlank() && !charLoading) {
+                                val msg = charInput.trim(); if (msg.isEmpty()) return@clickable; charMsgs = charMsgs + ("user" to msg); charInput = ""; charLoading = true
+                                charScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val cid = (c["id"] as? Number)?.toInt() ?: return@launch
+                                        val r = RetrofitClient.api.characterChat(cid, mapOf("user_message" to msg, "drama_id" to detail.id))
+                                        charMsgs = charMsgs + ("char" to (r["reply"] as? String ?: "……"))
+                                    } catch (_: Exception) { charMsgs = charMsgs + ("char" to "（连接失败）") }
+                                    charLoading = false
+                                }
+                            })
+                        }
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            items(charList.size) { idx -> val c = charList[idx]
+                                Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFFF8F8F8), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { selChar = c }) {
+                                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(shape = CircleShape, color = Color(0xFF7C4DFF), modifier = Modifier.size(44.dp)) { Box(contentAlignment = Alignment.Center) { androidx.compose.material3.Text((c["name"] as? String ?: "?").first().uppercase(), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) } }
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            androidx.compose.material3.Text(c["name"] as? String ?: "", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
+                                            val role = c["role"] as? String ?: ""; if (role.isNotEmpty()) androidx.compose.material3.Text(role, fontSize = 12.sp, color = Color(0xFF999999))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
