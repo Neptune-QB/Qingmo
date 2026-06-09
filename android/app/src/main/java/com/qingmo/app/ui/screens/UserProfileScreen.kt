@@ -81,23 +81,33 @@ fun UserProfileScreen(
             Box(Modifier.fillMaxWidth().height(0.5.dp).background(Border.copy(alpha = 0.2f)))
 
             if (currentPage == "likes") {
-                // 点赞：每集一条
                 if (likeList.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无记录", color = OnSurfaceMuted, fontSize = 14.sp) }
                 } else {
-                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(likeList.size) { idx ->
                             val r = likeList[idx]
                             val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
-                            Surface(shape = RoundedCornerShape(10.dp), color = Color.White, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable { if (dramaId > 0) onDramaClick(dramaId) }) {
-                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                                        Text("❤️", fontSize = 20.sp)
+                            val title = r["drama_title"] as? String ?: ""
+                            val cover = r["cover_url"] as? String ?: ""
+                            val epNum = r["episode_num"] ?: ""
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0) onDramaClick(dramaId) },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            ) {
+                                Column {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                                        if (cover.isNotEmpty()) {
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(cover).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        } else {
+                                            Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
+                                        }
                                     }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(r["drama_title"] as? String ?: "", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("第${r["episode_num"] ?: ""}集", fontSize = 12.sp, color = OnSurfaceMuted, modifier = Modifier.padding(top = 2.dp))
+                                    Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("❤️ 第${epNum}集", fontSize = 10.sp, color = Color(0xFFE53935), modifier = Modifier.padding(top = 2.dp))
                                     }
                                 }
                             }

@@ -705,12 +705,12 @@ def get_likes(episode_id: int, user_id: str = Query(default="")):
 
 @router.get("/user/likes")
 def get_user_likes(user_id: str = Query(...), limit: int = Query(default=50, ge=1, le=200)):
-    """获取用户点赞过的剧集列表"""
+    """获取用户点赞过的剧集列表（含封面URL）"""
     conn = get_connection()
     cursor = conn.cursor()
     uid = user_id
     cursor.execute("""
-        SELECT el.episode_id, e.episode_num, e.drama_id, d.title as drama_title, el.created_at
+        SELECT el.episode_id, e.episode_num, e.drama_id, d.title as drama_title, d.cover_url, el.created_at
         FROM episode_likes el
         JOIN episodes e ON el.episode_id = e.episode_id
         JOIN dramas d ON e.drama_id = d.id
@@ -721,7 +721,7 @@ def get_user_likes(user_id: str = Query(...), limit: int = Query(default=50, ge=
     result = [
         {"episode_id": r["episode_id"], "episode_num": r["episode_num"],
          "drama_id": r["drama_id"], "drama_title": r["drama_title"],
-         "created_at": r["created_at"]}
+         "cover_url": r["cover_url"] or "", "created_at": r["created_at"]}
         for r in cursor.fetchall()
     ]
     conn.close()
