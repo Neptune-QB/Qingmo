@@ -272,7 +272,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
     }
 
     // 小墨功能页面
-    if (showXiaoMoPage) {
+    if (showXiaoMoPage && !showSettings) {
         Column(
             Modifier
                 .fillMaxSize()
