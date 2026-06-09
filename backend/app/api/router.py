@@ -732,7 +732,7 @@ _xiaomo_rate_map: dict[int, dict[str, list]] = {}
 
 
 def _maybe_trigger_xiaomo_reply(episode_id: int, comment_id: int, user_nickname: str, text: str):
-    """检测 @小墨 触发词，通过则启动异步后台任务生成AI回复"""
+    """检测 @小墨 触发词，通过则启动后台线程生成AI回复"""
     match = XIAOMO_TRIGGER_RE.match(text)
     if not match:
         return
@@ -743,9 +743,9 @@ def _maybe_trigger_xiaomo_reply(episode_id: int, comment_id: int, user_nickname:
         return
 
     # 频率限制：每用户每集最多 5 次/分钟
+    import time as _time
+    now_ts = _time.time()
     ep_map = _xiaomo_rate_map.setdefault(episode_id, {})
-    now_ts = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else __import__('time').time()
-    uid_key = f"_{comment_id}"
     bucket = ep_map.setdefault(user_nickname, [])
     bucket = [t for t in bucket if now_ts - t < 60]
     ep_map[user_nickname] = bucket
@@ -753,14 +753,20 @@ def _maybe_trigger_xiaomo_reply(episode_id: int, comment_id: int, user_nickname:
         return
     bucket.append(now_ts)
 
-    asyncio.create_task(
-        _generate_xiaomo_comment_reply(
-            episode_id=episode_id,
-            parent_comment_id=comment_id,
-            user_question=user_question,
-            user_nickname=user_nickname,
-        )
+    # 使用线程而非 asyncio，兼容 sync endpoint
+    import threading
+    t = threading.Thread(
+        target=lambda: asyncio.run(
+            _generate_xiaomo_comment_reply(
+                episode_id=episode_id,
+                parent_comment_id=comment_id,
+                user_question=user_question,
+                user_nickname=user_nickname,
+            )
+        ),
+        daemon=True,
     )
+    t.start()
 
 
 async def _generate_xiaomo_comment_reply(
