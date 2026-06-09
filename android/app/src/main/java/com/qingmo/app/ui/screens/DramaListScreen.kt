@@ -222,11 +222,6 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     ),
             )
         },
-        floatingActionButton = {
-            Box(Modifier.size(56.dp).background(Color(0xFF7C4DFF), CircleShape).clickable { showSettings = true }, contentAlignment = Alignment.Center) {
-                Text("\u2699\uFE0F", fontSize = 24.sp)
-            }
-        },
         containerColor = Background,
     ) { padding ->
         when {
@@ -274,6 +269,10 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF333333),
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { showSettings = true }) {
+                    Text("\u2699\uFE0F", fontSize = 22.sp, modifier = Modifier.padding(4.dp))
+                }
             }
 
             Column(
