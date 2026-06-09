@@ -11,7 +11,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    const val BASE_URL = "http://192.168.42.28:8000/"
+    const val BASE_URL = "http://192.168.43.69:8000/"
 
     /** 鉴权拦截器：自动为所有请求添加 Bearer Token */
     private val authInterceptor = Interceptor { chain ->
