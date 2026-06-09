@@ -240,8 +240,8 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
                     modifier = Modifier.padding(padding),
                 )
         }
-        if (showSettings) com.qingmo.app.ui.components.XiaoMoSettingsSheet { showSettings = false }
     }
+    if (showSettings) com.qingmo.app.ui.components.XiaoMoSettingsSheet { showSettings = false }
 
     // 小墨功能页面
     if (showXiaoMoPage) {
