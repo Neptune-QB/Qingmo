@@ -10,6 +10,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -87,6 +88,17 @@ interface ApiService {
     suspend fun getFavorites(
         @Query("user_id") userId: String = "",
     ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @GET("api/v1/user/likes")
+    suspend fun getUserLikes(
+        @Query("user_id") userId: String = "",
+        @Query("limit") limit: Int = 50,
+    ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @PUT("api/v1/auth/me")
+    suspend fun updateMe(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
 
     @GET("api/v1/episodes/{episodeId}/counts")
     suspend fun getEpisodeCounts(

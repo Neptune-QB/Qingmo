@@ -684,6 +684,31 @@ def get_likes(episode_id: int, user_id: str = Query(default="")):
     return {"count": count, "liked": liked}
 
 
+@router.get("/user/likes")
+def get_user_likes(user_id: str = Query(...), limit: int = Query(default=50, ge=1, le=200)):
+    """获取用户点赞过的剧集列表"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute("""
+        SELECT el.episode_id, e.episode_num, e.drama_id, d.title as drama_title, el.created_at
+        FROM episode_likes el
+        JOIN episodes e ON el.episode_id = e.episode_id
+        JOIN dramas d ON e.drama_id = d.id
+        WHERE el.user_id = ?
+        ORDER BY el.created_at DESC
+        LIMIT ?
+    """, (uid, limit))
+    result = [
+        {"episode_id": r["episode_id"], "episode_num": r["episode_num"],
+         "drama_id": r["drama_id"], "drama_title": r["drama_title"],
+         "created_at": r["created_at"]}
+        for r in cursor.fetchall()
+    ]
+    conn.close()
+    return result
+
+
 @router.post("/dramas/{drama_id}/favorite")
 def toggle_favorite(drama_id: int, user_id: str = Body(..., embed=True)):
     """切换收藏状态，完全绑定当前登录用户"""
