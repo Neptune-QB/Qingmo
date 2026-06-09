@@ -88,7 +88,7 @@ fun NavGraph(deviceId: String) {
                 },
                 onBack = { navController.popBackStack() },
                 onDramaClick = { id -> navController.navigate(Routes.detail(id)) },
-                onEpisodeClick = { did, eid -> navController.navigate(Routes.detail(did)) },
+                onEpisodeClick = { did, eid -> navController.navigate(Routes.player(did, eid.toLong())) },
             )
         }
 
