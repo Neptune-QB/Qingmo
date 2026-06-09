@@ -180,6 +180,34 @@ def init_db():
             FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
         );
 
+        CREATE TABLE IF NOT EXISTS highlight_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            highlight_id INTEGER NOT NULL UNIQUE,
+            question TEXT NOT NULL,
+            option_a TEXT NOT NULL,
+            option_b TEXT NOT NULL,
+            FOREIGN KEY (highlight_id) REFERENCES highlights(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS highlight_vote_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vote_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            choice TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(vote_id, user_id),
+            FOREIGN KEY (vote_id) REFERENCES highlight_votes(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_quiz_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            highlight_id INTEGER NOT NULL,
+            score INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, highlight_id)
+        );
+
         CREATE TABLE IF NOT EXISTS user_chat_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,

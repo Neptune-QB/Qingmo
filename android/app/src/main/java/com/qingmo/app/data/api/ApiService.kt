@@ -83,6 +83,11 @@ interface ApiService {
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Map<String, @JvmSuppressWildcards Any>
 
+    @GET("api/v1/user/favorites")
+    suspend fun getFavorites(
+        @Query("user_id") userId: String = "",
+    ): List<Map<String, @JvmSuppressWildcards Any>>
+
     @GET("api/v1/episodes/{episodeId}/counts")
     suspend fun getEpisodeCounts(
         @Path("episodeId") episodeId: Long,
@@ -101,6 +106,12 @@ interface ApiService {
         @Query("limit") limit: Int = 50,
         @Query("offset") offset: Int = 0,
     ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @GET("api/v1/episodes/{episodeId}/comments/ai-reply-status")
+    suspend fun getAiReplyStatus(
+        @Path("episodeId") episodeId: Long,
+        @Query("parent_comment_ids") parentCommentIds: String,
+    ): Map<String, @JvmSuppressWildcards Any>
 
     // 小墨会话
     @POST("api/v1/agent/sessions")
@@ -123,6 +134,37 @@ interface ApiService {
 
     @POST("api/v1/agent/sessions/messages/append")
     suspend fun appendMessage(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // 剧情投票
+    @GET("api/v1/highlights/{highlightId}/vote")
+    suspend fun getHighlightVote(
+        @Path("highlightId") highlightId: Int,
+        @Query("user_id") userId: String = "",
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    @POST("api/v1/highlights/{highlightId}/vote")
+    suspend fun castHighlightVote(
+        @Path("highlightId") highlightId: Int,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // AI剧情问答
+    @GET("api/v1/highlights/{highlightId}/quiz")
+    suspend fun getHighlightQuiz(
+        @Path("highlightId") highlightId: Int,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // 角色AI对话
+    @GET("api/v1/characters")
+    suspend fun listCharacters(
+        @Query("drama_id") dramaId: Int,
+    ): List<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("api/v1/characters/{charId}/chat")
+    suspend fun characterChat(
+        @Path("charId") charId: Int,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Map<String, @JvmSuppressWildcards Any>
 }

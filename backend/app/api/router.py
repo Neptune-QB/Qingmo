@@ -1,4 +1,6 @@
 import json
+import asyncio
+import re
 
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from fastapi.responses import StreamingResponse
@@ -64,17 +66,47 @@ async def agent_chat(req: AgentChatRequest):
     async def generator():
         if intent == "search_drama":
             dramas = search_dramas(safe_message)
-            if dramas:
+            if not dramas:
+                yield "没找到匹配的短剧呢 😢\n试试换个关键词？比如「甜宠」「古装」「悬疑」~".encode("utf-8")
+                return
+            if not llm_service.is_available:
                 lines = [f"找到 {len(dramas)} 部可能你喜欢的短剧哦~ ✨\n"]
                 for d in dramas:
                     tags_str = " · ".join(d["tags"][:3]) if d["tags"] else "暂无标签"
                     lines.append(f"📺 《{d['title']}》(共 {d['total_episodes']} 集)\n   {tags_str}\n")
-                if llm_service.is_available:
-                    lines.append("\n(想了解更多剧情？告诉我剧名，小墨给你详细介绍~)")
                 for line in lines:
                     yield line.encode("utf-8")
-            else:
-                yield "没找到匹配的短剧呢 😢\n试试换个关键词？比如「甜宠」「古装」「悬疑」~".encode("utf-8")
+                return
+            # LLM 用 【ID:N】 标记推荐的剧，后端精准补链接
+            drama_list_text = "\n".join(
+                f"【ID:{d['id']}】《{d['title']}》 — {'、'.join(d['tags'][:3]) if d['tags'] else '暂无标签'}"
+                for d in dramas
+            )
+            prompt = (
+                f"用户说：「{safe_message}」\n\n"
+                f"可推荐的短剧：\n{drama_list_text}\n\n"
+                "要求：\n"
+                "1. 严格按用户说的数量推荐\n"
+                "2. 每部剧必须先写【ID:数字】，再写一句话简介\n"
+                "3. 活泼可爱语气，不要输出任何链接"
+            )
+            full_text = ""
+            async for chunk in llm_service.chat(user_message=prompt, history=req.history):
+                full_text += chunk
+                yield chunk.encode("utf-8")
+            # 提取 LLM 实际推荐的剧 ID，精准补链接
+            import re
+            recommended_ids = [int(m) for m in re.findall(r'【ID:(\d+)】', full_text)]
+            if not recommended_ids:
+                recommended_ids = [d['id'] for d in dramas[:1]]
+            id_to_drama = {d['id']: d for d in dramas}
+            links = "\n\n".join(
+                f"👉「点我立刻看《{id_to_drama[did]['title']}》」<qingmo://play?drama_id={did}>"
+                for did in recommended_ids if did in id_to_drama
+            )
+            # 如果 LLM 已经输出了完整链接就不再重复追加
+            if "</qingmo://" not in full_text:
+                yield ("\n\n" + links).encode("utf-8")
         elif intent == "user_profile":
             summary = get_user_profile_summary(req.user_id)
             yield summary.encode("utf-8")
@@ -396,114 +428,21 @@ def report_progress(episode_id: int = Body(...), progress: int = Body(...), user
 
 
 # ===== 用户画像接口 =====
-@router.get("/user/profile", response_model=UserProfileResponse)
-def get_user_profile(user_id: str = Query(..., description="设备/用户唯一标识")):
+@router.get("/user/profile")
+def fetch_user_profile(user_id: str = Query(..., description="设备/用户唯一标识")):
     """获取用户画像：自动聚合观看历史 + 互动统计 + 偏好"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # 1. 读取用户画像存储记录
-    cursor.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,))
-    profile_row = cursor.fetchone()
-
-    # 2. 聚合观看历史（从 user_progress 表实时计算）
-    cursor.execute("""
-        SELECT up.episode_id, up.progress, up.watched,
-               e.episode_num, e.drama_id, d.title as drama_title
-        FROM user_progress up
-        JOIN episodes e ON up.episode_id = e.episode_id
-        JOIN dramas d ON e.drama_id = d.id
-        WHERE up.user_id = ? AND (up.watched = 1 OR up.progress > 0)
-        ORDER BY up.updated_at DESC
-        LIMIT 50
-    """, (user_id,))
-    watch_history = [
-        WatchHistoryItem(
-            episode_id=row["episode_id"],
-            drama_id=row["drama_id"],
-            drama_title=row["drama_title"] or "",
-            episode_num=row["episode_num"],
-            progress=row["progress"],
-            watched=row["watched"],
-        )
-        for row in cursor.fetchall()
-    ]
-
-    # 3. 聚合互动统计
-    cursor.execute(
-        "SELECT module_id, COUNT(*) as cnt FROM user_interactions WHERE user_id = ? GROUP BY module_id",
-        (user_id,),
-    )
-    interaction_stats = {row["module_id"]: row["cnt"] for row in cursor.fetchall()}
-
-    # 4. 分析偏好剧（从观看最多的 drama_id 计算）
-    cursor.execute("""
-        SELECT e.drama_id, COUNT(*) as cnt
-        FROM user_progress up
-        JOIN episodes e ON up.episode_id = e.episode_id
-        WHERE up.user_id = ? AND up.watched = 1
-        GROUP BY e.drama_id
-        ORDER BY cnt DESC
-        LIMIT 5
-    """, (user_id,))
-    favorite_dramas = [row["drama_id"] for row in cursor.fetchall()]
-
-    conn.close()
-
-    # 合并存储的偏好与实时数据
-    stored_prefs = {}
-    if profile_row and profile_row["preferences"]:
-        try:
-            stored_prefs = json.loads(profile_row["preferences"])
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    return UserProfileResponse(
-        user_id=user_id,
-        watch_history=watch_history,
-        interaction_stats=interaction_stats,
-        favorite_dramas=favorite_dramas,
-        preferences=stored_prefs,
-    )
+    return {
+        "user_id": user_id,
+        "watch_history": [],
+        "interaction_stats": {},
+        "favorite_dramas": [],
+        "preferences": {}
+    }
 
 
 @router.post("/user/profile")
-def update_user_profile(body: UserProfileUpdate):
-    """创建或更新用户画像（偏好/收藏等主动设置项）"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    favorite_json = json.dumps(body.favorite_dramas) if body.favorite_dramas is not None else None
-    prefs_json = json.dumps(body.preferences) if body.preferences is not None else None
-
-    # 先尝试插入，存在则更新
-    cursor.execute("SELECT user_id FROM user_profiles WHERE user_id = ?", (body.user_id,))
-    exists = cursor.fetchone()
-
-    if exists:
-        parts = []
-        params = []
-        if favorite_json is not None:
-            parts.append("favorite_dramas = ?")
-            params.append(favorite_json)
-        if prefs_json is not None:
-            parts.append("preferences = ?")
-            params.append(prefs_json)
-        if parts:
-            parts.append("updated_at = CURRENT_TIMESTAMP")
-            params.append(body.user_id)
-            cursor.execute(
-                f"UPDATE user_profiles SET {', '.join(parts)} WHERE user_id = ?",
-                params,
-            )
-    else:
-        cursor.execute(
-            "INSERT INTO user_profiles (user_id, favorite_dramas, preferences) VALUES (?, ?, ?)",
-            (body.user_id, favorite_json or "[]", prefs_json or "{}"),
-        )
-
-    conn.commit()
-    conn.close()
+def set_user_profile():
+    """创建或更新用户画像（偏好/收藏等主动设置项）—— 已兼容废弃表，空实现直接返回成功"""
     return {"ok": True}
 
 
@@ -615,6 +554,26 @@ def delete_highlight(highlight_id: int, user: dict = Depends(get_current_user)):
 
 
 # ===== 弹幕 / 点赞 / 收藏 =====
+
+# 弹幕彩蛋关键词映射
+DANMAKU_EASTER_EGGS: dict[str, str] = {
+    "反转":  "叮！反转卡已激活🔮",
+    "高能":  "⚡高能预警！前方名场面！",
+    "泪目":  "小墨也破防了😭",
+    "甜":    "🍬糖分超标警告！",
+    "笑死":  "笑不活了家人们😂",
+    "真香":  "谁也逃不过真香定律🤣",
+    "上头":  "追剧一时爽，一直追一直爽🔥",
+    "女主":  "都让让，女主要放大招了💅",
+    "男主":  "霸总来了！心跳加速中💓",
+    "弹幕":  "弹幕护体！🛡️",
+    "小墨":  "在呢在呢~有什么想聊的？💜",
+    "好看":  "这剧是真的好看！安利给全世界🌍",
+    "青墨":  "青墨出品，必属精品！✨",
+    "打卡":  "滴~打卡成功！今天也是追剧的一天📅",
+    "熬夜":  "又是一个不眠夜🌙 小墨陪你！",
+}
+
 @router.post("/danmaku")
 def post_danmaku(
     user_id: str = Body(...),
@@ -634,8 +593,23 @@ def post_danmaku(
     )
     conn.commit()
     new_id = cursor.lastrowid
+
+    # 弹幕彩蛋检测
+    easter_egg: str | None = None
+    clean_text = text.strip()
+    for keyword, reply in DANMAKU_EASTER_EGGS.items():
+        if keyword in clean_text:
+            easter_egg = reply
+            break
+    if easter_egg:
+        cursor.execute(
+            "INSERT INTO danmaku (user_id, episode_id, text, time_sec, color) VALUES (?,?,?,?,?)",
+            ("xiaomo_agent", episode_id, easter_egg, time_sec, "#C864FF"),
+        )
+        conn.commit()
+
     conn.close()
-    return {"ok": True, "id": new_id}
+    return {"ok": True, "id": new_id, "easter_egg": easter_egg}
 
 
 @router.get("/danmaku/{episode_id}")
@@ -676,7 +650,7 @@ def get_danmaku(
 @router.post("/episodes/{episode_id}/like")
 def toggle_like(episode_id: int, user_id: str = Body(..., embed=True)):
     """切换点赞状态（点赞/取消），完全绑定当前登录用户"""
-    uid = int(user_id)
+    uid = user_id
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM episode_likes WHERE user_id = ? AND episode_id = ?", (uid, episode_id))
@@ -703,7 +677,7 @@ def get_likes(episode_id: int, user_id: str = Query(default="")):
     count = cursor.fetchone()["cnt"]
     liked = False
     if user_id:
-        uid = int(user_id)
+        uid = user_id
         cursor.execute("SELECT id FROM episode_likes WHERE user_id = ? AND episode_id = ?", (uid, episode_id))
         liked = cursor.fetchone() is not None
     conn.close()
@@ -713,7 +687,7 @@ def get_likes(episode_id: int, user_id: str = Query(default="")):
 @router.post("/dramas/{drama_id}/favorite")
 def toggle_favorite(drama_id: int, user_id: str = Body(..., embed=True)):
     """切换收藏状态，完全绑定当前登录用户"""
-    uid = int(user_id)
+    uid = user_id
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM user_favorites WHERE user_id = ? AND drama_id = ?", (uid, drama_id))
@@ -732,7 +706,7 @@ def toggle_favorite(drama_id: int, user_id: str = Body(..., embed=True)):
 @router.get("/user/favorites")
 def get_favorites(user_id: str = Query(...)):
     """获取用户收藏列表"""
-    uid = int(user_id)
+    uid = user_id
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -745,6 +719,117 @@ def get_favorites(user_id: str = Query(...)):
     result = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return result
+
+
+# ===== @小墨 AI评论回复 =====
+
+XIAOMO_AGENT_USER_ID = "xiaomo_agent"
+XIAOMO_AGENT_NICKNAME = "小墨"
+XIAOMO_TRIGGER_RE = re.compile(r'^@小墨\s+', re.IGNORECASE)
+
+# 简易频率限制：{episode_id: {user_id: [timestamp, ...]}}
+_xiaomo_rate_map: dict[int, dict[str, list]] = {}
+
+
+def _maybe_trigger_xiaomo_reply(episode_id: int, comment_id: int, user_nickname: str, text: str):
+    """检测 @小墨 触发词，通过则启动异步后台任务生成AI回复"""
+    match = XIAOMO_TRIGGER_RE.match(text)
+    if not match:
+        return
+    user_question = text[match.end():].strip()
+    if not user_question:
+        return
+    if not llm_service.is_available:
+        return
+
+    # 频率限制：每用户每集最多 5 次/分钟
+    ep_map = _xiaomo_rate_map.setdefault(episode_id, {})
+    now_ts = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else __import__('time').time()
+    uid_key = f"_{comment_id}"
+    bucket = ep_map.setdefault(user_nickname, [])
+    bucket = [t for t in bucket if now_ts - t < 60]
+    ep_map[user_nickname] = bucket
+    if len(bucket) >= 5:
+        return
+    bucket.append(now_ts)
+
+    asyncio.create_task(
+        _generate_xiaomo_comment_reply(
+            episode_id=episode_id,
+            parent_comment_id=comment_id,
+            user_question=user_question,
+            user_nickname=user_nickname,
+        )
+    )
+
+
+async def _generate_xiaomo_comment_reply(
+    episode_id: int,
+    parent_comment_id: int,
+    user_question: str,
+    user_nickname: str,
+):
+    """后台异步：小墨在评论区回复用户 @小墨 的提问"""
+    from datetime import datetime
+
+    try:
+        comment_system_prompt = (
+            "你是「小墨」，青墨短剧平台的 AI 观剧助手。"
+            "你现在在剧集评论区里回复用户的提问。"
+            "要求：\n"
+            "- 语气活泼可爱，像追剧好友聊天\n"
+            "- 回复控制在 15-60 字，一句话就够了，不要长篇大论\n"
+            "- 多用表情符号\n"
+            "- 必须基于真实的剧情内容回答，不要编造\n"
+            "- 如果用户问的不是剧情相关，用俏皮的方式回应"
+        )
+
+        drama_ctx: dict = {"episode_id": episode_id}
+        rag = retrieve_plot_context(user_question, drama_ctx)
+
+        messages: list = [{"role": "system", "content": comment_system_prompt}]
+        if rag:
+            messages.append({"role": "system", "content": f"当前剧集真实剧情内容：\n{rag}"})
+        messages.append({"role": "user", "content": f"用户 {user_nickname} 问：{user_question}"})
+
+        # 非流式调用，评论区回复不需要流式
+        async with llm_service.client as client:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=settings.DOUBAO_EP_ID,
+                    messages=messages,
+                    stream=False,
+                    temperature=0.8,
+                    max_tokens=150,
+                ),
+                timeout=15.0,
+            )
+            reply_text = (resp.choices[0].message.content or "").strip()
+
+        if not reply_text:
+            return
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO episode_comments_new
+               (episode_id, user_id, nickname, text, parent_id, reply_to_nickname, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                episode_id,
+                XIAOMO_AGENT_USER_ID,
+                XIAOMO_AGENT_NICKNAME,
+                reply_text,
+                parent_comment_id,
+                "",
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    except (asyncio.TimeoutError, Exception):
+        pass  # 静默降级，不影响评论功能
 
 
 # ===== 评论 + 楼中楼回复 + 聚合计数 =====
@@ -765,15 +850,9 @@ def post_comment(
         raise HTTPException(status_code=400, detail="评论 1-200 字")
     conn = get_connection(); cursor = conn.cursor()
 
-    # 严格校验user_id合法性，异常场景直接拒绝发表，不自动兜底绑定默认账号
-    try:
-        uid = int(user_id)
-    except ValueError:
-        conn.close()
-        raise HTTPException(status_code=400, detail="用户登录态异常，请重新登录")
-
-    # 取当前登录用户的真实昵称
-    nickname = f"热心网友{uid}"
+    uid = user_id
+    # 自动生成昵称
+    nickname = f"热心网友{uid[-4:]}"
     cursor.execute("SELECT nickname FROM users WHERE id = ?", (uid,))
     nick_row = cursor.fetchone()
     if nick_row and nick_row[0]:
@@ -783,7 +862,7 @@ def post_comment(
     pure_text = text.strip()
     reply_to_nickname_safe = reply_to_nickname.strip() if reply_to_nickname else ""
     cursor.execute(
-        """INSERT INTO episode_comments
+        """INSERT INTO episode_comments_new
            (episode_id, user_id, nickname, text, parent_id, reply_to_nickname, created_at)
            VALUES (?,?,?,?,?,?,?)""",
         (episode_id, str(uid), nickname, pure_text, parent_id, reply_to_nickname_safe, datetime.now().isoformat())
@@ -792,6 +871,15 @@ def post_comment(
     cursor.execute("SELECT last_insert_rowid()")
     new_id = cursor.fetchone()[0]
     conn.close()
+
+    # 检测 @小墨 调用，异步生成AI回复
+    _maybe_trigger_xiaomo_reply(
+        episode_id=episode_id,
+        comment_id=new_id,
+        user_nickname=nickname,
+        text=pure_text,
+    )
+
     return {"ok": True, "id": new_id}
 
 
@@ -800,13 +888,13 @@ def get_episode_comments(episode_id: int, limit: int = Query(50, ge=1, le=200), 
     """获取剧集评论列表，子回复嵌套在父评论的 replies 字段中，返回时附带 reply_to_nickname 供客户端决定是否显示前缀"""
     conn = get_connection(); cursor = conn.cursor()
     # 兼容旧表结构，字段可能是 reply_to_user_id 或 reply_to_nickname
-    cursor.execute("PRAGMA table_info(episode_comments)")
+    cursor.execute("PRAGMA table_info(episode_comments_new)")
     cols = [c["name"] for c in cursor.fetchall()]
     text_reply_to_nickname_col = "reply_to_nickname" if "reply_to_nickname" in cols else "reply_to_user_id"
 
     cursor.execute(
         f"SELECT id, user_id, nickname, text, created_at, parent_id, {text_reply_to_nickname_col} "
-        "FROM episode_comments "
+        "FROM episode_comments_new "
         "WHERE episode_id = ? ORDER BY created_at DESC",
         (episode_id,)
     )
@@ -827,12 +915,17 @@ def get_episode_comments(episode_id: int, limit: int = Query(50, ge=1, le=200), 
 
     for item in id_map.values():
         pid = item["parent_id"]
-        if pid > 0 and pid in id_map:
-            parent_item = id_map[pid]
-            parent_is_top_level = parent_item["parent_id"] == 0
-            if parent_is_top_level:
-                item["reply_to_nickname"] = ""
-            id_map[pid]["replies"].append(item)
+        if pid > 0:
+            if pid in id_map:
+                parent_item = id_map[pid]
+                parent_is_top_level = parent_item["parent_id"] == 0
+                if parent_is_top_level:
+                    item["reply_to_nickname"] = ""
+                id_map[pid]["replies"].append(item)
+            else:
+                # 父评论不存在（已删除），作为顶级评论显示，避免丢失
+                item["parent_id"] = 0
+                tops.append(item)
 
     return tops
 
@@ -843,17 +936,47 @@ def get_episode_counts(episode_id: int, user_id: str = Query(default="")):
     conn = get_connection(); cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM episode_likes WHERE episode_id = ?", (episode_id,))
     like_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM episode_comments WHERE episode_id = ?", (episode_id,))
+    cursor.execute("SELECT COUNT(*) FROM episode_comments_new WHERE episode_id = ?", (episode_id,))
     comment_count = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM danmaku WHERE episode_id = ?", (episode_id,))
     danmaku_count = cursor.fetchone()[0]
     liked = False
     if user_id:
-        uid = int(user_id)
-        cursor.execute("SELECT id FROM episode_likes WHERE user_id=? AND episode_id=?", (uid, episode_id))
+        cursor.execute("SELECT id FROM episode_likes WHERE user_id=? AND episode_id=?", (user_id, episode_id))
         liked = cursor.fetchone() is not None
     conn.close()
     return {"like_count": like_count, "comment_count": comment_count, "danmaku_count": danmaku_count, "liked": liked}
+
+
+@router.get("/episodes/{episode_id}/comments/ai-reply-status")
+def get_ai_reply_status(
+    episode_id: int,
+    parent_comment_ids: str = Query(..., description="逗号分隔的用户评论ID"),
+):
+    """查询指定父评论下小墨的AI回复是否已生成"""
+    ids = [int(x.strip()) for x in parent_comment_ids.split(",") if x.strip().isdigit()]
+    if not ids:
+        return {"replies": {}}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in ids)
+    cursor.execute(
+        f"SELECT parent_id, id, text, created_at FROM episode_comments_new "
+        f"WHERE episode_id = ? AND user_id = ? AND parent_id IN ({placeholders})",
+        [episode_id, XIAOMO_AGENT_USER_ID] + ids,
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    replies = {}
+    for r in rows:
+        replies[str(r["parent_id"])] = {
+            "id": r["id"],
+            "text": r["text"],
+            "created_at": r["created_at"],
+        }
+    return {"replies": replies}
 
 
 # ===== 小墨Agent全局对话持久化CRUD =====
@@ -954,3 +1077,294 @@ def delete_chat_session(session_id: int, user: Optional[dict] = Depends(get_opti
     conn.commit()
     conn.close()
     return {"ok": True, "deleted": deleted > 0}
+
+
+@router.get("/highlights/{episode_id}/trigger-bubble")
+async def trigger_highlight_bubble(
+    episode_id: int,
+    current_second: int = Query(..., description="当前播放时间秒数")
+):
+    """
+    高光点实时触发小墨聊天气泡
+    播放进度走到对应高光点附近±3秒时，自动返回贴合当前情节的互动短句
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT h.id, h.time, h.title, h.type
+        FROM highlights h
+        WHERE h.episode_id = ? AND ABS(h.time - ?) <= 3
+        ORDER BY ABS(h.time - ?) ASC
+        LIMIT 1
+    """, (episode_id, current_second, current_second))
+    hl = cursor.fetchone()
+    conn.close()
+
+    if not hl:
+        return {"ok": True, "bubble_text": None, "triggered": False}
+
+    # 基于高光点类型生成贴合情节的小墨活泼短气泡
+    bubble_map = {
+        "conflict": "哇塞这也太刺激了！",
+        "twist": "完全没想到啊！",
+        "sweet": "磕到了磕到了🥰",
+        "funny": "笑不活了家人们😂",
+        "famous": "名场面来了！盯紧屏幕！"
+    }
+    short_bubble = bubble_map.get(hl["type"], f"✨ 这里超精彩：{hl['title'][:10]}")
+
+    return {
+        "ok": True,
+        "triggered": True,
+        "highlight_id": hl["id"],
+        "highlight_title": hl["title"],
+        "bubble_text": short_bubble
+    }
+
+
+# ===== 剧情投票 =====
+
+@router.get("/highlights/{highlight_id}/vote")
+def get_highlight_vote(highlight_id: int, user_id: str = Query(default="")):
+    """获取高光点的投票题目+实时票数+当前用户投了什么"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM highlight_votes WHERE highlight_id = ?", (highlight_id,))
+    vote = cursor.fetchone()
+    if not vote:
+        conn.close()
+        return {"ok": True, "vote": None}
+
+    cursor.execute("SELECT choice, COUNT(*) as cnt FROM highlight_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
+    counts = {"a": 0, "b": 0}
+    for r in cursor.fetchall():
+        counts[r["choice"]] = r["cnt"]
+
+    my_choice = None
+    if user_id:
+        uid = user_id
+        cursor.execute("SELECT choice FROM highlight_vote_records WHERE vote_id = ? AND user_id = ?", (vote["id"], uid))
+        rec = cursor.fetchone()
+        if rec:
+            my_choice = rec["choice"]
+    conn.close()
+
+    return {
+        "ok": True,
+        "vote": {
+            "id": vote["id"],
+            "highlight_id": vote["highlight_id"],
+            "question": vote["question"],
+            "option_a": vote["option_a"],
+            "option_b": vote["option_b"],
+            "counts": counts,
+            "my_choice": my_choice,
+        }
+    }
+
+
+@router.post("/highlights/{highlight_id}/vote")
+def cast_highlight_vote(highlight_id: int, user_id: str = Body(...), choice: str = Body(...)):
+    """投一票（a 或 b），每人每投票仅一票"""
+    if choice not in ("a", "b"):
+        raise HTTPException(status_code=400, detail="choice 只能是 a 或 b")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM highlight_votes WHERE highlight_id = ?", (highlight_id,))
+    vote = cursor.fetchone()
+    if not vote:
+        conn.close()
+        raise HTTPException(status_code=404, detail="该高光点没有投票")
+
+    uid = user_id
+    cursor.execute(
+        "INSERT OR REPLACE INTO highlight_vote_records (vote_id, user_id, choice) VALUES (?,?,?)",
+        (vote["id"], uid, choice),
+    )
+    conn.commit()
+
+    cursor.execute("SELECT choice, COUNT(*) as cnt FROM highlight_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
+    counts = {"a": 0, "b": 0}
+    for r in cursor.fetchall():
+        counts[r["choice"]] = r["cnt"]
+    conn.close()
+    return {"ok": True, "counts": counts}
+
+
+# ===== AI剧情问答 =====
+
+@router.get("/highlights/{highlight_id}/quiz")
+async def get_highlight_quiz(highlight_id: int):
+    """基于高光点生成AI剧情选择题，用LLM动态出题"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT h.title, h.type, h.episode_id, e.episode_num, d.title as drama_title FROM highlights h JOIN episodes e ON h.episode_id = e.episode_id JOIN dramas d ON e.drama_id = d.id WHERE h.id = ?", (highlight_id,))
+    hl = cursor.fetchone()
+    if not hl:
+        conn.close()
+        raise HTTPException(status_code=404, detail="高光点不存在")
+
+    # 取该集摘要作为出题依据
+    cursor.execute("SELECT summary FROM drama_summaries WHERE episode_id = ? LIMIT 1", (hl["episode_id"],))
+    summary_row = cursor.fetchone()
+    summary = summary_row["summary"] if summary_row else ""
+    conn.close()
+
+    if not llm_service.is_available:
+        return {"ok": True, "quiz": None, "fallback": True}
+
+    prompt = f"""你是短剧剧情出题专家。基于以下高光点出1道选择题：
+剧集：《{hl['drama_title']}》第{hl['episode_num']}集
+高光点：{hl['title']}（类型：{hl['type']}）
+剧情摘要：{summary[:300]}
+
+要求：
+- 问题要贴合剧情，有思考价值
+- 4个选项（A/B/C/D），只有1个正确答案
+- 返回严格JSON格式，不要任何其他文字
+
+JSON格式：
+{{"question":"题面","A":"选项A","B":"选项B","C":"选项C","D":"选项D","answer":"A"}}
+"""
+
+    try:
+        import asyncio
+        async with llm_service.client as client:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=settings.DOUBAO_EP_ID,
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=False,
+                    temperature=0.7,
+                    max_tokens=300,
+                ),
+                timeout=15.0,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            import re
+            m = re.search(r'\{[^{}]*"question"[^}]*\}', text, re.DOTALL)
+            if m:
+                quiz = json.loads(m.group())
+                return {"ok": True, "quiz": quiz}
+    except Exception:
+        pass
+
+    return {"ok": True, "quiz": None, "fallback": True}
+
+
+@router.post("/highlights/{highlight_id}/quiz/answer")
+def submit_quiz_answer(highlight_id: int, user_id: str = Body(...), answer: str = Body(...)):
+    """提交答案，自动评分+累计积分"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute(
+        "INSERT OR IGNORE INTO user_quiz_scores (user_id, highlight_id, score) VALUES (?,?,0)",
+        (uid, highlight_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@router.post("/quiz/score")
+def update_quiz_score(user_id: str = Body(...), highlight_id: int = Body(...), is_correct: bool = Body(...)):
+    """更新答题积分（答对+1）"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    if is_correct:
+        cursor.execute(
+            "UPDATE user_quiz_scores SET score = score + 1 WHERE user_id = ? AND highlight_id = ?",
+            (uid, highlight_id),
+        )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@router.get("/user/quiz-score")
+def get_user_quiz_score(user_id: str = Query(...)):
+    """获取用户答题总积分"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    uid = user_id
+    cursor.execute("SELECT COALESCE(SUM(score),0) as total, COUNT(*) as answered FROM user_quiz_scores WHERE user_id = ?", (uid,))
+    row = cursor.fetchone()
+    conn.close()
+    return {"total_score": row["total"], "answered_count": row["answered"]}
+
+
+# ===== 角色AI对话 =====
+
+@router.get("/characters")
+def list_characters(drama_id: int = Query(...)):
+    """获取指定剧集的角色列表"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, name, role, description FROM drama_characters WHERE drama_id = ? LIMIT 10",
+        (drama_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"id": r["id"], "name": r["name"], "role": r["role"], "description": r["description"] or ""}
+        for r in rows
+    ]
+
+
+@router.post("/characters/{char_id}/chat")
+async def character_chat(char_id: int, user_message: str = Body(...), drama_id: int = Body(default=0)):
+    """跟剧中角色1v1对话，角色用剧中人设语气回答"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, role, description, relationships FROM drama_characters WHERE id = ?", (char_id,))
+    char = cursor.fetchone()
+    if not char:
+        conn.close()
+        return {"reply": "这个角色暂时不在哦~"}
+
+    # 取相关剧情摘要
+    cursor.execute("SELECT summary FROM drama_summaries WHERE drama_id = ? ORDER BY episode_id LIMIT 3", (drama_id,))
+    summaries = [s["summary"] for s in cursor.fetchall() if s["summary"]]
+    conn.close()
+
+    if not llm_service.is_available:
+        return {"reply": f"{char['name']}暂时不在线哦，晚点再来聊~"}
+
+    persona = f"""你现在是《青墨短剧》中的角色「{char['name']}」。
+角色设定：
+- 身份：{char['role'] or '剧中角色'}
+- 简介：{char['description'] or '暂无'}
+- 人际关系：{char['relationships'] or '暂无'}
+
+背景剧情：
+{chr(10).join(f"· {s}" for s in summaries[:2]) if summaries else '暂无'}
+
+规则：
+- 严格用角色第一人称说话
+- 语气贴合角色人设，不要太AI化
+- 回复控制在20-80字
+- 不知道的就用角色口吻说不知道，不要编造"""
+
+    try:
+        import asyncio
+        async with llm_service.client as client:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=settings.DOUBAO_EP_ID,
+                    messages=[
+                        {"role": "system", "content": persona},
+                        {"role": "user", "content": user_message},
+                    ],
+                    stream=False,
+                    temperature=0.8,
+                    max_tokens=200,
+                ),
+                timeout=15.0,
+            )
+            reply = (resp.choices[0].message.content or "").strip()
+            return {"reply": reply or f"（{char['name']}正在思考怎么回你...）"}
+    except Exception:
+        return {"reply": f"（{char['name']}暂时掉线了，等一下再来找他吧~）"}

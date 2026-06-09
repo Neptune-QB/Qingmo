@@ -41,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -54,6 +55,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -189,7 +191,7 @@ private fun Pager(
     var fullscreen by remember { mutableStateOf(false) }
     var curPos by remember { mutableLongStateOf(0L) }
     var curDur by remember { mutableLongStateOf(0L) }
-    val userId = remember { DeviceIdProvider.getDeviceId(ctx) }
+    val userId = remember { com.qingmo.app.data.auth.TokenManager.getUserId().takeIf { it > 0 }?.toString() ?: DeviceIdProvider.getDeviceId(ctx) }
     val keyboardController = LocalSoftwareKeyboardController.current
     var showDanmakuInput by remember { mutableStateOf(false) }
     var showCommentInput by remember { mutableStateOf(false) }
@@ -373,29 +375,222 @@ private fun Pager(
 
         // 小墨 Peek — 右侧栏上方
         if (!fullscreen && showXiaoMo && !xiaoMoExpanded) {
+            val xiaoMoState by XiaoMoCore.state.collectAsState()
             XiaoMoPeekView(
                 visible = true,
+                pose = xiaoMoState.pose,
+                emotion = xiaoMoState.emotion,
                 onClick = { xiaoMoExpanded = true },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(bottom = 240.dp),
             )
+
+            // 一键弹幕浮层：高光点触发后，在小墨下方弹出互动面板
+            val pendingHL = xiaoMoState.pendingDanmakuHighlight
+            if (pendingHL != null) {
+                val scope = rememberCoroutineScope()
+                var showMode by remember { mutableStateOf("emotion") } // emotion | vote | quiz
+                var voteData by remember { mutableStateOf<Map<String, Any>?>(null) }
+                var quizData by remember { mutableStateOf<Map<String, Any>?>(null) }
+                var voteCounts by remember { mutableStateOf(mapOf("a" to 0, "b" to 0)) }
+                var myVote by remember { mutableStateOf<String?>(null) }
+                var quizSelected by remember { mutableStateOf<String?>(null) }
+                var quizResult by remember { mutableStateOf<String?>(null) }
+
+                // 加载投票/问答数据
+                LaunchedEffect(pendingHL.id) {
+                    // 检查投票
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        try {
+                            val v = RetrofitClient.api.getHighlightVote(pendingHL.id, userId)
+                            if (v["vote"] != null) {
+                                voteData = (v["vote"] as? Map<String, Any>)
+                                voteCounts = ((v["vote"] as? Map<String, Any>)?.get("counts") as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { (it.value as? Number)?.toInt() ?: 0 } ?: mapOf("a" to 0, "b" to 0)
+                                myVote = (v["vote"] as? Map<String, Any>)?.get("my_choice") as? String
+                                showMode = "vote"
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    // 检查问答
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        try {
+                            val q = RetrofitClient.api.getHighlightQuiz(pendingHL.id)
+                            if (q["quiz"] != null) {
+                                quizData = q["quiz"] as? Map<String, Any>
+                                showMode = "quiz"
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(bottom = 140.dp, end = 4.dp),
+                ) {
+                    when (showMode) {
+                        "vote" -> {
+                            val vd = voteData
+                            if (vd != null) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .background(Color(0xFF2A2A2A).copy(alpha = 0.88f), RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                ) {
+                                    Text("📊 ${vd["question"] ?: ""}", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.height(10.dp))
+                                    val total = (voteCounts["a"] ?: 0) + (voteCounts["b"] ?: 0)
+                                    listOf("a" to (vd["option_a"] as? String ?: "A"), "b" to (vd["option_b"] as? String ?: "B")).forEach { (key, label) ->
+                                        val count = voteCounts[key] ?: 0
+                                        val pct = if (total > 0) (count.toFloat() / total) else 0f
+                                        val isMy = myVote == key
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isMy) Color(0xFF7C4DFF).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.12f),
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                                .clickable(enabled = myVote == null) {
+                                                    myVote = key
+                                                    scope.launch(Dispatchers.IO) {
+                                                        try {
+                                                            val resp = RetrofitClient.api.castHighlightVote(pendingHL.id, mapOf("user_id" to userId, "choice" to key))
+                                                            val newCounts = resp["counts"] as? Map<*, *>
+                                                            if (newCounts != null) {
+                                                                voteCounts = newCounts.mapKeys { it.key.toString() }.mapValues { (it.value as? Number)?.toInt() ?: 0 }
+                                                            }
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                },
+                                        ) {
+                                            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Text(label, fontSize = 14.sp, color = Color.White)
+                                                if (myVote != null) Text("${(pct * 100).toInt()}%", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "quiz" -> {
+                            val qd = quizData
+                            if (qd != null) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .background(Color(0xFF2A2A2A).copy(alpha = 0.88f), RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                ) {
+                                    Text("🤔 ${qd["question"] ?: ""}", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.height(8.dp))
+                                    listOf("A", "B", "C", "D").forEach { key ->
+                                        val label = qd[key] as? String ?: return@forEach
+                                        val isSel = quizSelected == key
+                                        val isCorrect = key == (qd["answer"] as? String ?: "")
+                                        val bgColor = when {
+                                            quizSelected == null -> Color.White.copy(alpha = 0.12f)
+                                            isSel && isCorrect -> Color(0xFF4CAF50).copy(alpha = 0.6f)
+                                            isSel && !isCorrect -> Color(0xFFE53935).copy(alpha = 0.5f)
+                                            !isSel && isCorrect && quizSelected != null -> Color(0xFF4CAF50).copy(alpha = 0.3f)
+                                            else -> Color.White.copy(alpha = 0.08f)
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = bgColor,
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                                .clickable(enabled = quizSelected == null) {
+                                                    quizSelected = key
+                                                    val correct = key == (qd["answer"] as? String ?: "")
+                                                    quizResult = if (correct) "✅ 答对了！" else "❌ 正确答案是 ${qd["answer"]}"
+                                                    scope.launch(Dispatchers.IO) {
+                                                        try {
+                                                            RetrofitClient.api.castHighlightVote(pendingHL.id, mapOf("user_id" to userId, "choice" to key))
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                },
+                                        ) {
+                                            Text("$key. $label", fontSize = 13.sp, color = Color.White, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp))
+                                        }
+                                    }
+                                    quizResult?.let {
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(it, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            // 默认情绪弹幕面板
+                            val hints = pendingHL.emotionHints ?: listOf("👍", "❤️", "😂", "😮", "👏")
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .background(Color(0xFF2A2A2A).copy(alpha = 0.88f), RoundedCornerShape(16.dp))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                            ) {
+                                Text(
+                                    text = pendingHL.title,
+                                    fontSize = 13.sp,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    hints.forEach { hint ->
+                                        Surface(
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = Color.White.copy(alpha = 0.15f),
+                                            modifier = Modifier.clickable {
+                                                val ep = curEp ?: return@clickable
+                                                val text = hint
+                                                val nowSec = curPos / 1000f
+                                                val item = DanmakuItem(
+                                                    id = System.currentTimeMillis(),
+                                                    text = text,
+                                                    timeSec = nowSec,
+                                                    color = AndroidColor.WHITE,
+                                                    userId = userId,
+                                                )
+                                                adapter.addDanmakuToCurrent(ep.episodeId, item, forceEmit = true)
+                                                scope.launch(Dispatchers.IO) {
+                                                    try {
+                                                        RetrofitClient.api.postDanmaku(
+                                                            mapOf(
+                                                                "user_id" to userId,
+                                                                "episode_id" to ep.episodeId,
+                                                                "text" to text,
+                                                                "time_sec" to nowSec.toDouble(),
+                                                            )
+                                                        )
+                                                    } catch (_: Exception) {}
+                                                }
+                                                adapter.onUserDanmaku(ep.episodeId, text)
+                                                XiaoMoCore.onDanmakuSentSuccess()
+                                            },
+                                        ) {
+                                            Text(
+                                                text = hint,
+                                                fontSize = 22.sp,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        // 小墨对话框
-        if (xiaoMoExpanded) {
-            XiaoMoPanelView(
-                visible = true, title = "小墨",
-                onClose = { xiaoMoExpanded = false; XiaoMoCore.collapse() },
-                children = {
-                    XiaoMoChatPanel(
-                        userId = userId,
-                        dramaContext = curEp?.let { mapOf("drama_id" to detail.id, "drama_title" to detail.title, "episode_num" to it.episodeNum) },
-                    )
-                },
-                modifier = Modifier.align(Alignment.CenterEnd).padding(bottom = 100.dp),
-            )
-        }
+        // 小墨聊天底部抽屉 — 和评论界面完全一致风格
+        XiaoMoChatSheet(
+            visible = xiaoMoExpanded,
+            userId = userId,
+            dramaContext = curEp?.let { mapOf("drama_id" to detail.id, "drama_title" to detail.title, "episode_num" to it.episodeNum) },
+            onDismiss = { xiaoMoExpanded = false; XiaoMoCore.collapse() }
+        )
 
         // 弹幕输入浮层
         LaunchedEffect(showDanmakuInput, showCommentInput) {
@@ -426,6 +621,7 @@ private fun Pager(
                     val item = DanmakuItem(id = System.currentTimeMillis(), text = text, timeSec = nowSec, color = AndroidColor.WHITE, userId = userId)
                     adapter.addDanmakuToCurrent(ep.episodeId, item, forceEmit = true)
                     danmakuSentText = "弹幕已发送"
+                    adapter.onUserDanmaku(ep.episodeId, text)
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
                             RetrofitClient.api.postDanmaku(mapOf("user_id" to userId, "episode_id" to ep.episodeId, "text" to text, "time_sec" to nowSec))
@@ -444,7 +640,9 @@ private fun Pager(
             episodeId = showDiscussionSheetEpisodeId,
             userId = com.qingmo.app.data.auth.TokenManager.getUserId().toString(),
             scope = rememberCoroutineScope(),
-            onDismiss = { showCommentInput = false }
+            onDismiss = { showCommentInput = false },
+            onCommentPosted = { adapter.refreshCommentCount(showDiscussionSheetEpisodeId) },
+            onNavigateToDrama = { onBack() }
         )
 
         // 弹幕发送成功提示 — 播放器上半区居中
@@ -511,6 +709,10 @@ private class NativeAdapter(
     private val viewHolders = SparseArray<VH>()
     private val d = dm.density
     private var danmakuGlobalEnabled = true
+    private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.HighlightItem>>()
+    private val triggeredSet = mutableSetOf<Int>()
+    private var consecutiveCount = 1
+    private var lastWatchedDramaId: Long = 0
 
     fun setDanmakuEnabled(enabled: Boolean) {
         danmakuGlobalEnabled = enabled
@@ -519,9 +721,20 @@ private class NativeAdapter(
         }
     }
 
+    fun refreshCommentCount(episodeId: Long) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.api.getEpisodeCounts(episodeId, userId)
+                val commentCnt = (resp["comment_count"] as? Number)?.toInt() ?: 0
+                val label = activeVh?.commentLabel
+                label?.post { label.text = formatCount(commentCnt) }
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun dp(v: Float) = (v * d + 0.5f).toInt()
 
-    private var activeVh: VH? = null
+    internal var activeVh: VH? = null
     private var isFullscreen = false
     private val danmakuCache = mutableMapOf<Long, List<DanmakuItem>>()
     private val danmakuLoaded = mutableSetOf<Long>()
@@ -558,6 +771,13 @@ private class NativeAdapter(
         val likeLabel: TextView,
         val commentLabel: TextView,
         val favoriteLabel: TextView,
+        var likeIv: ImageView,
+        var isLiked: Boolean = false,
+        var likeCount: Int = 0,
+        var countsLoaded: Boolean = false,
+        var favoriteIv: ImageView,
+        var isFavorited: Boolean = false,
+        var favoritesLoaded: Boolean = false,
     ) : RecyclerView.ViewHolder(root)
 
     override fun getItemCount() = eps.size
@@ -664,27 +884,16 @@ private class NativeAdapter(
                 else -> n.toString()
             }
         }
-        var favoriteCount = 0
-        val favoriteLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
-        var isFavorited = false
         var favoriteIv = ImageView(c).apply {
             setImageResource(com.qingmo.app.R.drawable.unstarred)
             adjustViewBounds = true
         }
+        val favoriteLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
         val favoriteContainer = FrameLayout(c).apply {
             setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
             val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
             favoriteIv.layoutParams = lp
             addView(favoriteIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
-            setOnClickListener {
-                isFavorited = !isFavorited
-                if (isFavorited) favoriteCount += 1 else favoriteCount -= 1
-                favoriteLabel.text = formatCount(favoriteCount)
-                favoriteIv.setImageResource(if (isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
-                favoriteIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
-                    favoriteIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
-                }.start()
-            }
         }
         rb.addView(actionItemWithLabelCustom(favoriteContainer, favoriteLabel))
         var commentCount = 0
@@ -718,9 +927,7 @@ private class NativeAdapter(
                 shareLabel.text = formatCount(shareCount)
             }
         }
-        var likeCount = 0
         val likeLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
-        var isLiked = false
         val likeIv = ImageView(c).apply {
             setImageResource(com.qingmo.app.R.drawable.dislike)
             adjustViewBounds = true
@@ -728,16 +935,6 @@ private class NativeAdapter(
         val likeContainer = FrameLayout(c).apply {
             setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
             addView(likeIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
-            setOnClickListener {
-                isLiked = !isLiked
-                if (isLiked) likeCount += 1 else likeCount -=1
-                likeLabel.text = formatCount(likeCount)
-                likeIv.setImageResource(if (isLiked) com.qingmo.app.R.drawable.like else com.qingmo.app.R.drawable.dislike)
-                // 爱心弹性弹跳动效，小放大倍数完全无裁剪
-                likeIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
-                    likeIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
-                }.start()
-            }
         }
         rb.addView(actionItemWithLabelCustom(likeContainer, likeLabel))
         rb.addView(actionItemWithLabelCustom(shareContainer, shareLabel))
@@ -872,7 +1069,7 @@ private class NativeAdapter(
                 layoutParams = LinearLayout.LayoutParams(dp(28f), dp(28f))
             }
         bottomBar.addView(fsBtn)
-        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel)
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv)
     }
 
     override fun onBindViewHolder(
@@ -892,13 +1089,21 @@ private class NativeAdapter(
         if (pos == cur) activeVh = h
         h.titleTv.text = "\u7B2C${ep.episodeNum}\u96C6"
         h.speedTv.text = "${rate}x"
-        // 加载计数
+        // 加载计数 + 点赞状态（绑定用户 ID）
+        h.countsLoaded = false
         scope.launch(Dispatchers.IO) {
             try {
-                val resp = RetrofitClient.api.getEpisodeCounts(ep.episodeId, "")
+                val resp = RetrofitClient.api.getEpisodeCounts(ep.episodeId, userId)
                 val likeCnt = (resp["like_count"] as? Number)?.toInt() ?: 0
                 val commentCnt = (resp["comment_count"] as? Number)?.toInt() ?: 0
-                h.likeLabel.post { h.likeLabel.text = formatCount(likeCnt) }
+                val liked = resp["liked"] as? Boolean ?: false
+                h.likeLabel.post {
+                    h.isLiked = liked
+                    h.likeCount = likeCnt
+                    h.likeLabel.text = formatCount(likeCnt)
+                    h.likeIv.setImageResource(if (liked) com.qingmo.app.R.drawable.like else com.qingmo.app.R.drawable.dislike)
+                    h.countsLoaded = true
+                }
                 h.commentLabel.post { h.commentLabel.text = formatCount(commentCnt) }
             } catch (_: Exception) {}
         }
@@ -931,15 +1136,41 @@ private class NativeAdapter(
         // 加载该集高光点 → 进度条画青色标记点
         scope.launch(Dispatchers.IO) {
             try {
-                val episodeWrap = RetrofitClient.api.getEpisode(ep.episodeId)
-                val highlightList = episodeWrap.highlights
+                val playbackWrap = RetrofitClient.api.getPlaybackInfo(ep.episodeId)
+                val highlightList = playbackWrap.highlights
                 h.seekBar.post { h.seekBar.setHighlights(highlightList) }
+                highlightCache[ep.episodeId.toInt()] = highlightList
             } catch (_: Exception) {}
         }
         // 点击 100%真实addView顺序：0=收藏 1=评论 2=点赞 3=分享
         val rg = h.rightBar as ViewGroup
-        // 收藏按钮
-        rg.getChildAt(0).setOnClickListener { onFavoriteClick?.invoke(detail.id.toLong()) }
+        // 收藏按钮（收藏状态加载完成后才响应，先乐观更新 UI 再发 API）
+        h.favoritesLoaded = false
+        scope.launch(Dispatchers.IO) {
+            try {
+                val favList = RetrofitClient.api.getFavorites(userId)
+                val favIds = favList.mapNotNull { (it["drama_id"] as? Number)?.toInt() }
+                val isFav = detail.id.toInt() in favIds
+                h.favoriteIv.post {
+                    h.isFavorited = isFav
+                    h.favoriteIv.setImageResource(if (isFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                    h.favoriteLabel.text = formatCount(favList.size)
+                    h.favoritesLoaded = true
+                }
+            } catch (_: Exception) {}
+        }
+        rg.getChildAt(0).setOnClickListener {
+            if (!h.favoritesLoaded) return@setOnClickListener
+            h.isFavorited = !h.isFavorited
+            // 乐观更新收藏数
+            val cur = h.favoriteLabel.text.toString().toIntOrNull() ?: 0
+            h.favoriteLabel.text = formatCount(if (h.isFavorited) cur + 1 else cur - 1)
+            h.favoriteIv.setImageResource(if (h.isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+            h.favoriteIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
+                h.favoriteIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }.start()
+            onFavoriteClick?.invoke(detail.id.toLong())
+        }
         // 评论按钮 就是review.png图标 绝对正确位置
         rg.getChildAt(1).setOnClickListener {
             // 先弹跳动效
@@ -948,20 +1179,25 @@ private class NativeAdapter(
             }.start()
             onCommentClick?.invoke(ep.episodeId)
         }
-        // 点赞按钮
-        rg.getChildAt(2).setOnClickListener { onLikeClick?.invoke(ep.episodeId) }
+        // 点赞按钮（counts 加载完成后才响应，先乐观更新 UI 再发 API）
+        rg.getChildAt(2).setOnClickListener {
+            if (!h.countsLoaded) return@setOnClickListener
+            h.isLiked = !h.isLiked
+            h.likeCount = if (h.isLiked) h.likeCount + 1 else h.likeCount - 1
+            h.likeLabel.text = formatCount(h.likeCount)
+            h.likeIv.setImageResource(if (h.isLiked) com.qingmo.app.R.drawable.like else com.qingmo.app.R.drawable.dislike)
+            h.likeIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
+                h.likeIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }.start()
+            onLikeClick?.invoke(ep.episodeId)
+        }
         // 分享按钮
         rg.getChildAt(3).setOnClickListener {  }
         val player =
             players[pos] ?: run {
                 val sp = ProgressCache.get(ep.episodeId)
-                // 本地即时生成视频URL，完全消除等待后端playback接口的网络RoundTrip，实现秒加载
-                // TODO: dramaId=1 的视频文件名从 63.mp4 起始，与 episodeNum 存在偏移量
-                //       后续统一改为后端 playback API 返回 videoUrl 消除此硬编码
-                val localVideoUrl = when (detail.id) {
-                    1 -> "videos/1/${63 + ep.episodeNum - 1}.mp4"
-                    else -> "videos/${detail.id}/${ep.episodeNum}.mp4"
-                }
+                // 直接用episode_num作为真实MP4文件名，北派#1本身就是63~81集，零偏移零出错
+                val localVideoUrl = "videos/${detail.id}/${ep.episodeNum}.mp4"
                 ExoPlayer.Builder(ctx)
                     .setLoadControl(
                         DefaultLoadControl.Builder()
@@ -985,9 +1221,27 @@ private class NativeAdapter(
                                     ) {
                                         ProgressCache.markWatched(eps[pos].episodeId)
                                         ProgressCache.save(eps[pos].episodeId, 0L)
-                                        onEpisodeEnd(
-                                            pos + 1,
-                                        )
+                                        // 集结束陪看播报
+                                        val hlTitles = highlightCache[ep.episodeId.toInt()]
+                                            ?.take(3)?.joinToString("、") { it.title } ?: ""
+                                        val endMsg = if (hlTitles.isNotEmpty()) "📺 本集高能：$hlTitles" else "📺 本集结束~"
+                                        sendXiaomoDanmaku(ep.episodeId, endMsg, delayMs = 500)
+                                        // 连看成就
+                                        val nextPos = pos + 1
+                                        if (nextPos < eps.size && detail.id.toLong() == lastWatchedDramaId) {
+                                            consecutiveCount++
+                                        } else {
+                                            consecutiveCount = 1
+                                        }
+                                        lastWatchedDramaId = detail.id.toLong()
+                                        val milestones = setOf(3, 5, 10, 20, 30)
+                                        if (consecutiveCount in milestones) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(1500)
+                                                sendXiaomoDanmaku(ep.episodeId, "🔥 连看${consecutiveCount}集！你是真上头了！")
+                                            }
+                                        }
+                                        onEpisodeEnd(nextPos)
                                     }
                                 }
                                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1010,6 +1264,7 @@ private class NativeAdapter(
         progressJobs[pos] =
             scope.launch {
                 var last = 0L
+                val epHighlights = highlightCache[ep.episodeId.toInt()] ?: emptyList()
                 while (true) {
                     val p = player.currentPosition
                     if (player.isPlaying) {
@@ -1017,12 +1272,28 @@ private class NativeAdapter(
                             ProgressCache.save(ep.episodeId, p)
                             last = p
                         }
+                        // 高光点自动检测：播放进度到达高光点 ±3s 内自动触发
+                        for (hl in epHighlights) {
+                            val hlMs = (hl.time * 1000).toLong()
+                            if (kotlin.math.abs(p - hlMs) < 3000 && triggeredSet.add(hl.id)) {
+                                com.qingmo.app.xiaomo.XiaoMoCore.triggerDanmakuHint(hl)
+                                // AI 替身自动发弹幕
+                                val autoText = hl.emotionHints?.randomOrNull() ?: hl.title
+                                sendXiaomoDanmaku(ep.episodeId, autoText)
+                                break
+                            }
+                        }
                     }
                     h.danmakuView.updatePlaybackTime(p)
                     delay(200)
                 }
             }
         val savedMs = ProgressCache.get(ep.episodeId)
+        // 集开始陪看播报：从头开始看时自动发小墨弹幕
+        if (savedMs <= 1000L) {
+            val startMsg = "🎬 第${ep.episodeNum}集来啦~"
+            sendXiaomoDanmaku(ep.episodeId, startMsg, delayMs = 1200)
+        }
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
         h.seekBar.onSeek = { ms -> player.seekTo(ms); h.danmakuView.seekTo(ms) }
@@ -1102,6 +1373,48 @@ private class NativeAdapter(
                 else h.danmakuView.addPendingDanmaku(item)
             }
         }
+    }
+
+    // ===== 小墨互动增强 =====
+    private val xiaomoPurple = 0xFFC864FF.toInt()
+
+    private fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0) {
+        val nowMs = activePlayer?.currentPosition ?: 0L
+        val item = DanmakuItem(
+            id = System.currentTimeMillis(),
+            text = text,
+            timeSec = nowMs / 1000f,
+            color = xiaomoPurple,
+            userId = "xiaomo_agent",
+        )
+        if (delayMs > 0) {
+            scope.launch {
+                kotlinx.coroutines.delay(delayMs)
+                addDanmakuToCurrent(episodeId, item, forceEmit = true)
+            }
+        } else {
+            addDanmakuToCurrent(episodeId, item, forceEmit = true)
+        }
+    }
+
+    /** 弹幕接龙：用户发弹幕后小墨有概率接话 */
+    fun onUserDanmaku(episodeId: Long, userText: String) {
+        if (kotlin.random.Random.nextInt(100) >= 20) return // 20% 概率
+        val replyPool = when {
+            userText.contains("哈哈") || userText.contains("笑") || userText.contains("😂") ->
+                listOf("我也笑喷了😂", "太搞笑了", "哈哈哈哈", "笑死我了")
+            userText.contains("甜") || userText.contains("❤") || userText.contains("嗑") ->
+                listOf("磕到了🥰", "太甜了吧！", "我也嗑这对！")
+            userText.contains("啊") || userText.contains("天哪") || userText.contains("😱") ->
+                listOf("没想到啊！", "我人傻了", "真的假的！", "震惊！")
+            userText.contains("帅") || userText.contains("美") || userText.contains("好看") ->
+                listOf("确实好看！", "颜值暴击😍", "完全认同")
+            else ->
+                listOf("确实！", "说得好！", "嗯嗯~", "+1", "同感！")
+        }
+        val reply = replyPool.random()
+        val delayMs = (2000..4000L).random()
+        sendXiaomoDanmaku(episodeId, reply, delayMs)
     }
 
     fun setActive(pos: Int) {
@@ -1227,26 +1540,27 @@ private class NativeAdapter(
             }
         }
 
+        private val safePadding = dp(7f).toFloat() // 左右安全边距 完全避免圆点裁切
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val cy = height / 2f
-            val w = width.toFloat()
+            val w = (width - 2*safePadding).toFloat()
             val th = if (isDragging) dp(4f).toFloat() else trackHeight
             val tr = if (isDragging) 0x40FFFFFF.toInt() else trackPaint.color
             val pr = if (isDragging) 0xE0FFFFFF.toInt() else progressPaint.color
             canvas.drawRoundRect(
-                0f,
+                safePadding,
                 cy - th / 2,
-                w,
+                width - safePadding,
                 cy + th / 2,
                 th / 2,
                 th / 2,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tr },
             )
-            val px = w * progress
-            if (px > 0) {
+            val px = safePadding + w * progress
+            if (px > safePadding) {
                 canvas.drawRoundRect(
-                    0f,
+                    safePadding,
                     cy - th / 2,
                     px,
                     cy + th / 2,
@@ -1257,21 +1571,23 @@ private class NativeAdapter(
             }
             highlights.forEach { h ->
                 val hProgress = if (totalDuration > 0) (h.time * 1000f / totalDuration).coerceIn(0f,1f) else 0f
-                val dotX = w * hProgress
+                val dotX = safePadding + w * hProgress
                 canvas.drawCircle(dotX, cy, dp(3.5f).toFloat(), highlightDotPaint)
             }
             canvas.drawCircle(px, cy, if (isDragging) dp(6f).toFloat() else thumbRadius, thumbPaint)
         }
 
         override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+            val effectiveW = (width - 2*safePadding)
+            val touchXInTrack = (event.x - safePadding).coerceIn(0f, effectiveW.toFloat())
             when (event.action) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     isDragging = true
-                    updateProgress(event.x)
+                    updateProgress(touchXInTrack, effectiveW.toFloat())
                     timeLabel.visibility = View.VISIBLE
                     updateTimeLabel()
                     peekLabel.visibility = View.GONE
-                    val downProgress = (event.x / width).coerceIn(0f, 1f)
+                    val downProgress = (touchXInTrack / effectiveW).coerceIn(0f, 1f)
                     val curSec = if (totalDuration > 0) (downProgress * totalDuration / 1000f) else 0f
                     val nearHighlight = highlights.minByOrNull { abs(it.time - curSec) }
                     if (nearHighlight != null && abs(nearHighlight.time - curSec) < 8f) {
@@ -1286,9 +1602,18 @@ private class NativeAdapter(
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     longPressJob?.cancel()
-                    peekLabel.visibility = View.GONE
-                    updateProgress(event.x)
+                    updateProgress(touchXInTrack, effectiveW.toFloat())
                     updateTimeLabel()
+                    // 拖拽移动过程中实时检测附近8秒范围内的高光点，手指滑到高光点立刻显示提示
+                    val moveProgress = (touchXInTrack / effectiveW).coerceIn(0f, 1f)
+                    val curSec = if (totalDuration > 0) (moveProgress * totalDuration / 1000f) else 0f
+                    val nearHighlight = highlights.minByOrNull { abs(it.time - curSec) }
+                    if (nearHighlight != null && abs(nearHighlight.time - curSec) < 8f) {
+                        peekLabel.text = nearHighlight.title
+                        peekLabel.visibility = View.VISIBLE
+                    } else {
+                        peekLabel.visibility = View.GONE
+                    }
                 }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                     longPressJob?.cancel()
@@ -1317,8 +1642,8 @@ private class NativeAdapter(
             return true
         }
 
-        private fun updateProgress(x: Float) {
-            progress = (x / width).coerceIn(0f, 1f)
+        private fun updateProgress(xInTrack: Float, effectiveW: Float) {
+            progress = (xInTrack / effectiveW).coerceIn(0f, 1f)
             postInvalidate()
         }
 
@@ -1591,6 +1916,7 @@ private fun CommentItem(
     showTime: String, likeCount: Int, liked: Boolean,
     replies: List<Map<String, Any>>, isExpanded: Boolean,
     isMine: Boolean,
+    isXiaomo: Boolean = false,
     repliesMine: List<Boolean>,
     likeCounts: MutableMap<Int, Int>, likedSet: MutableSet<Int>,
     expandMap: MutableMap<Int, Boolean>,
@@ -1606,7 +1932,7 @@ private fun CommentItem(
     // 顶级评论无缩进，所有子回复统一全局16dp缩进，永远不叠加
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            Surface(shape = CircleShape, color = Color(0xFFE8F6F7), modifier = Modifier.size(avatarSize)) {
+            Surface(shape = CircleShape, color = if (isXiaomo) Color(0xFF7C4DFF) else Color(0xFFE8F6F7), modifier = Modifier.size(avatarSize)) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(nickname.first().uppercase(), color = Color.White, fontSize = avatarFont, fontWeight = FontWeight.Bold)
                 }
@@ -1614,8 +1940,13 @@ private fun CommentItem(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(nickname, fontSize = nameFont, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
-                    if (isMine) {
+                    Text(nickname, fontSize = nameFont, fontWeight = FontWeight.Bold, color = if (isXiaomo) Color(0xFF7C4DFF) else Color(0xFF333333))
+                    if (isXiaomo) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF7C4DFF).copy(alpha=0.12f)) {
+                            Text("小墨 AI", fontSize = 11.sp, color = Color(0xFF7C4DFF), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=6.dp, vertical=1.dp))
+                        }
+                    } else if (isMine) {
                         Spacer(Modifier.width(6.dp))
                         Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF1E88E5).copy(alpha=0.12f)) {
                             Text("我的", fontSize = 11.sp, color = Color(0xFF1A535C), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=6.dp, vertical=1.dp))
@@ -1626,8 +1957,10 @@ private fun CommentItem(
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Row {
                         Text(showTime, fontSize = 12.sp, color = Color(0xFF999999))
-                        Spacer(Modifier.width(12.dp))
-                        Text("回复", fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(id, nickname, true) })
+                        if (!isXiaomo) {
+                            Spacer(Modifier.width(12.dp))
+                            Text("回复", fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(id, nickname, true) })
+                        }
                     }
                     Row(Modifier.clickable { onLike(id, liked) }) {
                         Text(if (liked) "❤️" else "🤍", fontSize = 14.sp)
@@ -1733,12 +2066,106 @@ private fun ReplyItem(
 
 @Suppress("ktlint:standard:function-naming")
 @Composable
+fun XiaoMoChatSheet(
+    visible: Boolean,
+    userId: String,
+    dramaContext: Map<String, Any>?,
+    onDismiss: () -> Unit,
+) {
+    // 全局记忆聊天消息，完全不绑定visible，退出抽屉永远不销毁聊天历史
+    val persistentMessages = remember(userId) {
+        mutableStateListOf<com.qingmo.app.data.chat.ChatMessage>().apply {
+            // 首次打开自动追加欢迎消息
+            add(
+                com.qingmo.app.data.chat.ChatMessage(
+                    id = 0,
+                    role = com.qingmo.app.data.chat.ChatMessage.Role.XiaoMo,
+                    content = "嗨！我是小墨，你的 AI 观剧伙伴~\n有什么想聊的吗？可以问我推荐短剧、讨论剧情，或者问我的看法哦！✨",
+                ),
+            )
+        }
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(250)) + fadeIn(tween(250)),
+        exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(200)) + fadeOut(tween(200))
+    ) {
+        androidx.activity.compose.BackHandler { onDismiss() }
+        Column(Modifier.fillMaxSize().imePadding()) {
+            Box(Modifier.fillMaxWidth().weight(0.35f).clickable { onDismiss() })
+            Surface(
+                modifier = Modifier.fillMaxWidth().weight(0.65f),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                color = Color.White,
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    var dragOffset by remember { mutableFloatStateOf(0f) }
+                    val sheetHeightPx = with(LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() * 0.65f }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp, bottom = 8.dp)
+                            .pointerInput(Unit) {
+                                detectVerticalDragGestures(
+                                    onDragEnd = {
+                                        if (dragOffset > sheetHeightPx * 0.3f) onDismiss()
+                                        dragOffset = 0f
+                                    },
+                                    onDragCancel = { dragOffset = 0f },
+                                    onVerticalDrag = { _, amount -> dragOffset += amount }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(Modifier.width(40.dp).height(4.dp).background(Color(0xFFDDDDDD), RoundedCornerShape(2.dp)))
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("和小墨聊天", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333), modifier = Modifier.weight(1f))
+                        Text("✕", fontSize = 20.sp, color = Color(0xFF999999), modifier = Modifier.clickable { onDismiss() })
+                    }
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+                    val linkCtx = androidx.compose.ui.platform.LocalContext.current
+                    Box(Modifier.weight(1f).fillMaxSize().padding(horizontal = 12.dp)) {
+                        com.qingmo.app.xiaomo.ui.XiaoMoChatPanel(
+                            userId = userId,
+                            dramaContext = dramaContext,
+                            externalMessages = persistentMessages,
+                            onLinkClick = {
+                                android.widget.Toast.makeText(linkCtx, "跳转到剧集...", android.widget.Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun countCommentsDeep(comments: List<Map<String, Any>>): Int {
+    var total = 0
+    for (c in comments) {
+        total += 1
+        val replies = c["replies"] as? List<Map<String, Any>> ?: emptyList()
+        total += countCommentsDeep(replies)
+    }
+    return total
+}
+
+@Suppress("ktlint:standard:function-naming")
+@Composable
 private fun DiscussionSheet(
     visible: Boolean,
     episodeId: Long,
     userId: String,
     scope: CoroutineScope,
     onDismiss: () -> Unit,
+    onCommentPosted: () -> Unit = {},
+    onNavigateToDrama: (Int) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var comments by remember(episodeId) { mutableStateOf(listOf<Map<String, Any>>()) }
@@ -1808,7 +2235,7 @@ private fun DiscussionSheet(
                         Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        val totalAll = remember(comments) { comments.size + comments.sumOf { (it["replies"] as? List<*>)?.size ?: 0 } }
+                        val totalAll = remember(comments) { countCommentsDeep(comments) }
                         Text("${totalAll}条评论", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333), modifier = Modifier.weight(1f))
                         Text("✕", fontSize = 20.sp, color = Color(0xFF999999), modifier = Modifier.clickable { onDismiss() })
                     }
@@ -1842,6 +2269,7 @@ private fun DiscussionSheet(
                                 showTime = showTime, likeCount = likeCount, liked = liked,
                                 replies = replies, isExpanded = isExpanded,
                                 isMine = commentUserId == userId,
+                                isXiaomo = commentUserId == "xiaomo_agent",
                                 repliesMine = repliesMine,
                                 likeCounts = likeCounts, likedSet = likedSet,
                                 expandMap = expandMap,
@@ -1888,7 +2316,7 @@ private fun DiscussionSheet(
                                     val hint = if (replyTargetNick.isNotEmpty())
                                         "@$replyTargetNick："
                                     else
-                                        "有趣评论千千万，不如你也来一条？"
+                                        "输入评论，@小墨 可以问我剧情问题~"
                                     Text(hint, fontSize = 14.sp, color = Color(0xFFBBBBBB), maxLines = 1)
                                 }
                                 inner()
@@ -1899,14 +2327,16 @@ private fun DiscussionSheet(
                     Text("发布", fontSize = 14.sp, color = if (inputText.trim().isNotEmpty()) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = inputText.trim().isNotEmpty()) {
                         val pureText = inputText.trim()
                         if (pureText.isEmpty()) return@clickable
+                        val isAtXiaomo = pureText.startsWith("@小墨", ignoreCase = true)
                         scope.launch(Dispatchers.IO) {
                             try {
-                                RetrofitClient.api.postComment(episodeId, mapOf(
+                                val resp = RetrofitClient.api.postComment(episodeId, mapOf(
                                     "user_id" to com.qingmo.app.data.auth.TokenManager.getUserId().toString(),
                                     "text" to pureText,
                                     "parent_id" to replyParentId,
                                     "reply_to_nickname" to if (replyTargetIsTopLevel) "" else replyTargetNick
                                 ))
+                                val commentId = (resp["id"] as? Number)?.toInt() ?: 0
                                 comments = RetrofitClient.api.getComments(episodeId)
                                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                                     if (replyParentId > 0) {
@@ -1914,7 +2344,27 @@ private fun DiscussionSheet(
                                     }
                                     inputText = ""; replyTargetNick = ""; replyParentId = 0; replyTargetIsTopLevel = true
                                     keyboardCtrl?.hide()
+                                    onCommentPosted()
                                     android.widget.Toast.makeText(ctx, "发送成功", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                // @小墨 轮询等待AI回复
+                                if (isAtXiaomo && commentId > 0) {
+                                    launch(Dispatchers.IO) {
+                                        repeat(6) {
+                                            kotlinx.coroutines.delay(2000)
+                                            try {
+                                                val status = RetrofitClient.api.getAiReplyStatus(episodeId, commentId.toString())
+                                                val replies = status["replies"] as? Map<*, *>
+                                                if (replies != null && replies.containsKey(commentId.toString())) {
+                                                    comments = RetrofitClient.api.getComments(episodeId)
+                                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                                        expandMap = expandMap.toMutableMap().also { it[commentId] = true }
+                                                    }
+                                                    return@repeat
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
                                 }
                             } catch (_: Exception) {
                                 kotlinx.coroutines.withContext(Dispatchers.Main) { android.widget.Toast.makeText(ctx, "发送失败", android.widget.Toast.LENGTH_SHORT).show() }
@@ -1927,4 +2377,131 @@ private fun DiscussionSheet(
     }
 }
 
+@Composable
+fun CharacterChatDialog(
+    dramaId: Int,
+    userId: String,
+    onDismiss: () -> Unit,
+) {
+    var characters by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
+    var selectedChar by remember { mutableStateOf<Map<String, Any>?>(null) }
+    var inputText by remember { mutableStateOf("") }
+    var messages by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(dramaId) {
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            try {
+                characters = RetrofitClient.api.listCharacters(dramaId)
+            } catch (_: Exception) {}
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).clickable { if (selectedChar == null) onDismiss() }) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.75f).align(Alignment.BottomCenter),
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            color = Color.White,
+        ) {
+            Column(Modifier.fillMaxSize().imePadding()) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (selectedChar != null) "💬 ${(selectedChar!!["name"] as? String ?: "")}" else "🎭 选择角色",
+                        fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                    )
+                    TextButton(onClick = { if (selectedChar != null) selectedChar = null else onDismiss() }) {
+                        Text(if (selectedChar != null) "返回" else "关闭", color = Color(0xFF999999))
+                    }
+                }
+                Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
+
+                if (selectedChar != null) {
+                    val char = selectedChar!!
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        reverseLayout = true,
+                    ) {
+                        val reversed = messages.reversed()
+                        items(reversed.size) { idx ->
+                            val msg = reversed[idx]
+                            val isUser = msg.first == "user"
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isUser) Color(0xFF1E88E5) else Color(0xFFF0F0F0),
+                                ) {
+                                    androidx.compose.material3.Text(msg.second, fontSize = 14.sp, color = if (isUser) Color.White else Color(0xFF333333), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Row(Modifier.fillMaxWidth().padding(12.dp).background(Color.White), verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f).height(40.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp),
+                            textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (inputText.isEmpty()) Text("和${char["name"]}说点什么...", color = Color(0xFFBBBBBB), fontSize = 14.sp)
+                                    innerTextField()
+                                }
+                            },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("发送", color = if (inputText.isNotBlank() && !loading) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = inputText.isNotBlank() && !loading) {
+                            val msg = inputText.trim()
+                            if (msg.isEmpty()) return@clickable
+                            messages = messages + ("user" to msg)
+                            inputText = ""
+                            loading = true
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val charId = (char["id"] as? Number)?.toInt() ?: return@launch
+                                    val resp = RetrofitClient.api.characterChat(charId, mapOf("user_message" to msg, "drama_id" to dramaId))
+                                    val reply = resp["reply"] as? String ?: "（对方暂时不在线）"
+                                    messages = messages + ("char" to reply)
+                                } catch (_: Exception) {
+                                    messages = messages + ("char" to "（连接失败，稍后再试）")
+                                }
+                                loading = false
+                            }
+                        })
+                    }
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        items(characters.size) { idx ->
+                            val c = characters[idx]
+                            val name = c["name"] as? String ?: ""
+                            val role = c["role"] as? String ?: ""
+                            val desc = c["description"] as? String ?: ""
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFF8F8F8),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { selectedChar = c },
+                            ) {
+                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(shape = CircleShape, color = Color(0xFF7C4DFF), modifier = Modifier.size(44.dp)) {
+                                        Box(contentAlignment = Alignment.Center) { Text(name.first().uppercase(), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
+                                        if (role.isNotEmpty()) Text(role, fontSize = 12.sp, color = Color(0xFF999999))
+                                        if (desc.isNotEmpty()) Text(desc, fontSize = 11.sp, color = Color(0xFFBBBBBB), maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
+} 
