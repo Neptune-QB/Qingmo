@@ -430,7 +430,8 @@ private fun Pager(
                 // 加载投票/问答数据
                 LaunchedEffect(pendingHL.id) {
                     // 检查投票
-                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_vote")) {
+                        kotlinx.coroutines.withContext(Dispatchers.IO) {
                         try {
                             val v = RetrofitClient.api.getHighlightVote(pendingHL.id, userId)
                             if (v["vote"] != null) {
@@ -441,8 +442,10 @@ private fun Pager(
                             }
                         } catch (_: Exception) {}
                     }
+                    }
                     // 检查问答
-                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_quiz")) {
+                        kotlinx.coroutines.withContext(Dispatchers.IO) {
                         try {
                             val q = RetrofitClient.api.getHighlightQuiz(pendingHL.id)
                             if (q["quiz"] != null) {
@@ -450,6 +453,7 @@ private fun Pager(
                                 showMode = "quiz"
                             }
                         } catch (_: Exception) {}
+                    }
                     }
                 }
 
@@ -1365,10 +1369,12 @@ private class NativeAdapter(
                                         ProgressCache.markWatched(eps[pos].episodeId)
                                         ProgressCache.save(eps[pos].episodeId, 0L)
                                         // 集结束陪看播报
-                                        val hlTitles = highlightCache[ep.episodeId.toInt()]
-                                            ?.take(3)?.joinToString("、") { it.title } ?: ""
-                                        val endMsg = if (hlTitles.isNotEmpty()) "📺 本集高能：$hlTitles" else "📺 本集结束~"
-                                        sendXiaomoDanmaku(ep.episodeId, endMsg, delayMs = 500)
+                                        if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("watch_greeting")) {
+                                            val hlTitles = highlightCache[ep.episodeId.toInt()]
+                                                ?.take(3)?.joinToString("、") { it.title } ?: ""
+                                            val endMsg = if (hlTitles.isNotEmpty()) "📺 本集高能：$hlTitles" else "📺 本集结束~"
+                                            sendXiaomoDanmaku(ep.episodeId, endMsg, delayMs = 500)
+                                        }
                                         // 连看成就
                                         val nextPos = pos + 1
                                         if (nextPos < eps.size && detail.id.toLong() == lastWatchedDramaId) {
@@ -1378,7 +1384,7 @@ private class NativeAdapter(
                                         }
                                         lastWatchedDramaId = detail.id.toLong()
                                         val milestones = setOf(3, 5, 10, 20, 30)
-                                        if (consecutiveCount in milestones) {
+                                        if (consecutiveCount in milestones && com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("streak_achievement")) {
                                             scope.launch {
                                                 kotlinx.coroutines.delay(1500)
                                                 sendXiaomoDanmaku(ep.episodeId, "🔥 连看${consecutiveCount}集！你是真上头了！")
@@ -1419,10 +1425,14 @@ private class NativeAdapter(
                         for (hl in epHighlights) {
                             val hlMs = (hl.time * 1000).toLong()
                             if (kotlin.math.abs(p - hlMs) < 3000 && triggeredSet.add(hl.id)) {
-                                com.qingmo.app.xiaomo.XiaoMoCore.triggerDanmakuHint(hl)
+                                if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_bubble") || com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("on_tap_danmaku")) {
+                                    com.qingmo.app.xiaomo.XiaoMoCore.triggerDanmakuHint(hl)
+                                }
                                 // AI 替身自动发弹幕
-                                val autoText = hl.emotionHints?.randomOrNull() ?: hl.title
-                                sendXiaomoDanmaku(ep.episodeId, autoText)
+                                if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("auto_danmaku")) {
+                                    val autoText = hl.emotionHints?.randomOrNull() ?: hl.title
+                                    sendXiaomoDanmaku(ep.episodeId, autoText)
+                                }
                                 break
                             }
                         }
@@ -1433,7 +1443,7 @@ private class NativeAdapter(
             }
         val savedMs = ProgressCache.get(ep.episodeId)
         // 集开始陪看播报：从头开始看时自动发小墨弹幕
-        if (savedMs <= 1000L) {
+        if (savedMs <= 1000L && com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("watch_greeting")) {
             val startMsg = "🎬 第${ep.episodeNum}集来啦~"
             sendXiaomoDanmaku(ep.episodeId, startMsg, delayMs = 1200)
         }
@@ -1542,6 +1552,7 @@ private class NativeAdapter(
 
     /** 弹幕接龙：用户发弹幕后小墨有概率接话 */
     fun onUserDanmaku(episodeId: Long, userText: String) {
+        if (!com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("danmaku_chain")) return
         if (kotlin.random.Random.nextInt(100) >= 20) return // 20% 概率
         val replyPool = when {
             userText.contains("哈哈") || userText.contains("笑") || userText.contains("😂") ->
