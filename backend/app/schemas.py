@@ -21,7 +21,6 @@ class EpisodeBrief(BaseModel):
 class DramaDetail(BaseModel):
     id: int
     title: str
-    author: Optional[str] = None
     description: Optional[str] = None
     cover_url: str = ""
     tags: List[str] = []

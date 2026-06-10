@@ -52,6 +52,7 @@ import com.qingmo.app.data.model.EpisodeBrief
 import com.qingmo.app.data.repository.DramaRepository
 import com.qingmo.app.ui.theme.Background
 import com.qingmo.app.ui.theme.Border
+import com.qingmo.app.ui.theme.GraphiteTeal
 import com.qingmo.app.ui.theme.OnBackground
 import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceVariant
@@ -315,13 +316,13 @@ private fun EpisodeItem(
         }
     val bgColor =
         when {
-            isCurrent -> Primary
+            isCurrent -> GraphiteTeal
             isWatched -> SurfaceVariant.copy(alpha = 0.4f)
             else -> SurfaceElevated
         }
     val border =
         when {
-            isCurrent -> BorderStroke(1.5.dp, Primary)
+            isCurrent -> BorderStroke(1.5.dp, GraphiteTeal)
             isWatched -> BorderStroke(0.5.dp, Border.copy(alpha = 0.3f))
             else -> BorderStroke(0.5.dp, Border)
         }

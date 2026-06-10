@@ -266,29 +266,32 @@ def get_interaction_stats(
     )
 
 
+def _split_tags(tags_str: Optional[str]) -> List[str]:
+    """拆分用 / 分隔的标签字符串，返回最多前3个标签"""
+    if not tags_str:
+        return []
+    return [t.strip() for t in tags_str.split("/") if t.strip()][:3]
+
+
 @router.get("/dramas", response_model=list[DramaBrief])
 def get_dramas(tag: Optional[str] = Query(default=None, description="按标签筛选")):
     conn = get_connection()
     cursor = conn.cursor()
     if tag:
+        # 用 instr 精准匹配，防止标签子串误伤
         cursor.execute(
-            "SELECT DISTINCT d.id, d.title, d.cover_url, d.total_episodes FROM dramas d JOIN drama_tags dt ON d.id = dt.drama_id WHERE dt.tag = ?",
+            "SELECT id, title, cover_url, total_episodes, tags FROM dramas WHERE instr('/' || tags || '/', '/' || ? || '/') > 0",
             (tag,),
         )
     else:
-        cursor.execute("SELECT id, title, cover_url, total_episodes FROM dramas")
+        cursor.execute("SELECT id, title, cover_url, total_episodes, tags FROM dramas")
     rows = cursor.fetchall()
-
-    cursor.execute("SELECT drama_id, tag FROM drama_tags ORDER BY drama_id")
-    tag_map: dict[int, list[str]] = {}
-    for row in cursor.fetchall():
-        tag_map.setdefault(row["drama_id"], []).append(row["tag"])
 
     result = []
     for r in rows:
         result.append(DramaBrief(
             id=r["id"], title=r["title"], cover_url=r["cover_url"],
-            tags=tag_map.get(r["id"], []), total_episodes=r["total_episodes"],
+            tags=_split_tags(r["tags"]), total_episodes=r["total_episodes"],
         ))
     conn.close()
     return result
@@ -307,17 +310,15 @@ def search_dramas_api(
     conditions = []
     params = []
     for kw in keywords:
-        conditions.append("(d.title LIKE ? OR dt.tag LIKE ?)")
+        conditions.append("(d.title LIKE ? OR d.tags LIKE ?)")
         params.extend([f"%{kw}%", f"%{kw}%"])
     if tag:
-        conditions.append("dt2.tag = ?")
+        conditions.append("instr('/' || d.tags || '/', '/' || ? || '/') > 0")
         params.append(tag)
     where = " OR ".join(conditions)
     sql = f"""
-        SELECT DISTINCT d.id, d.title, d.cover_url, d.total_episodes
+        SELECT d.id, d.title, d.cover_url, d.total_episodes, d.tags
         FROM dramas d
-        LEFT JOIN drama_tags dt ON d.id = dt.drama_id
-        {'LEFT JOIN drama_tags dt2 ON d.id = dt2.drama_id' if tag else ''}
         WHERE {where}
         ORDER BY d.total_episodes DESC
         LIMIT 10
@@ -325,16 +326,11 @@ def search_dramas_api(
     cursor.execute(sql, params)
     rows = cursor.fetchall()
 
-    cursor.execute("SELECT drama_id, tag FROM drama_tags ORDER BY drama_id")
-    tag_map: dict[int, list[str]] = {}
-    for row in cursor.fetchall():
-        tag_map.setdefault(row["drama_id"], []).append(row["tag"])
-
     result = []
     for r in rows:
         result.append(DramaBrief(
             id=r["id"], title=r["title"], cover_url=r["cover_url"],
-            tags=tag_map.get(r["id"], []), total_episodes=r["total_episodes"],
+            tags=_split_tags(r["tags"]), total_episodes=r["total_episodes"],
         ))
     conn.close()
     return result
@@ -350,8 +346,7 @@ def get_drama_detail(drama_id: int):
         conn.close()
         raise HTTPException(status_code=404, detail="Drama not found")
 
-    cursor.execute("SELECT tag FROM drama_tags WHERE drama_id = ?", (drama_id,))
-    tags = [t["tag"] for t in cursor.fetchall()]
+    tags = _split_tags(row["tags"])
 
     cursor.execute(
         "SELECT episode_id, episode_num, title, duration, thumbnail_url FROM episodes WHERE drama_id = ? ORDER BY episode_num",
@@ -364,11 +359,13 @@ def get_drama_detail(drama_id: int):
         ) for e in cursor.fetchall()
     ]
 
+    cursor.execute("SELECT COUNT(*) FROM user_favorites WHERE drama_id = ?", (drama_id,))
+    fav_count = cursor.fetchone()[0]
     conn.close()
     return DramaDetail(
-        id=row["id"], title=row["title"], author=row["author"] or None,
+        id=row["id"], title=row["title"],
         description=row["description"] or None, cover_url=row["cover_url"],
-        tags=tags, episodes=episodes,
+        tags=tags, episodes=episodes, fav_count=fav_count,
     )
 
 
@@ -614,7 +611,7 @@ def post_danmaku(
     new_id = cursor.lastrowid
 
     # 弹幕彩蛋检测
-    easter_egg: str | None = None
+    easter_egg: Optional[str] = None
     clean_text = text.strip()
     for keyword, reply in DANMAKU_EASTER_EGGS.items():
         if keyword in clean_text:
@@ -710,7 +707,7 @@ def get_user_likes(user_id: str = Query(...), limit: int = Query(default=50, ge=
     cursor = conn.cursor()
     uid = user_id
     cursor.execute("""
-        SELECT el.episode_id, e.episode_num, e.drama_id, d.title as drama_title, d.cover_url, e.thumbnail_url, el.created_at
+        SELECT el.episode_id, e.episode_num, e.drama_id, d.title as drama_title, d.cover_url, e.thumbnail_url, e.video_url, el.created_at
         FROM episode_likes el
         JOIN episodes e ON el.episode_id = e.episode_id
         JOIN dramas d ON e.drama_id = d.id
@@ -722,6 +719,7 @@ def get_user_likes(user_id: str = Query(...), limit: int = Query(default=50, ge=
         {"episode_id": r["episode_id"], "episode_num": r["episode_num"],
          "drama_id": r["drama_id"], "drama_title": r["drama_title"],
          "cover_url": r["cover_url"] or "", "thumbnail_url": r["thumbnail_url"] or "",
+         "video_url": r["video_url"] or "",
          "created_at": r["created_at"]}
         for r in cursor.fetchall()
     ]
@@ -875,7 +873,7 @@ async def _generate_xiaomo_comment_reply(
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO episode_comments_new
+            """INSERT INTO episode_comments
                (episode_id, user_id, nickname, text, parent_id, reply_to_nickname, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
@@ -925,7 +923,7 @@ def post_comment(
     pure_text = text.strip()
     reply_to_nickname_safe = reply_to_nickname.strip() if reply_to_nickname else ""
     cursor.execute(
-        """INSERT INTO episode_comments_new
+        """INSERT INTO episode_comments
            (episode_id, user_id, nickname, text, parent_id, reply_to_nickname, created_at)
            VALUES (?,?,?,?,?,?,?)""",
         (episode_id, str(uid), nickname, pure_text, parent_id, reply_to_nickname_safe, datetime.now().isoformat())
@@ -935,13 +933,13 @@ def post_comment(
     new_id = cursor.fetchone()[0]
     conn.close()
 
-    # 检测 @小墨 调用，异步生成AI回复
-    _maybe_trigger_xiaomo_reply(
+    import threading
+    threading.Thread(target=lambda: _maybe_trigger_xiaomo_reply(
         episode_id=episode_id,
         comment_id=new_id,
         user_nickname=nickname,
         text=pure_text,
-    )
+    ), daemon=True).start()
 
     return {"ok": True, "id": new_id}
 
@@ -951,13 +949,13 @@ def get_episode_comments(episode_id: int, limit: int = Query(50, ge=1, le=200), 
     """获取剧集评论列表，子回复嵌套在父评论的 replies 字段中，返回时附带 reply_to_nickname 供客户端决定是否显示前缀"""
     conn = get_connection(); cursor = conn.cursor()
     # 兼容旧表结构，字段可能是 reply_to_user_id 或 reply_to_nickname
-    cursor.execute("PRAGMA table_info(episode_comments_new)")
+    cursor.execute("PRAGMA table_info(episode_comments)")
     cols = [c["name"] for c in cursor.fetchall()]
     text_reply_to_nickname_col = "reply_to_nickname" if "reply_to_nickname" in cols else "reply_to_user_id"
 
     cursor.execute(
         f"SELECT id, user_id, nickname, text, created_at, parent_id, {text_reply_to_nickname_col} "
-        "FROM episode_comments_new "
+        "FROM episode_comments "
         "WHERE episode_id = ? ORDER BY created_at DESC",
         (episode_id,)
     )
@@ -999,7 +997,7 @@ def get_episode_counts(episode_id: int, user_id: str = Query(default="")):
     conn = get_connection(); cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM episode_likes WHERE episode_id = ?", (episode_id,))
     like_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM episode_comments_new WHERE episode_id = ?", (episode_id,))
+    cursor.execute("SELECT COUNT(*) FROM episode_comments WHERE episode_id = ?", (episode_id,))
     comment_count = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM danmaku WHERE episode_id = ?", (episode_id,))
     danmaku_count = cursor.fetchone()[0]
@@ -1025,7 +1023,7 @@ def get_ai_reply_status(
     cursor = conn.cursor()
     placeholders = ",".join("?" for _ in ids)
     cursor.execute(
-        f"SELECT parent_id, id, text, created_at FROM episode_comments_new "
+        f"SELECT parent_id, id, text, created_at FROM episode_comments "
         f"WHERE episode_id = ? AND user_id = ? AND parent_id IN ({placeholders})",
         [episode_id, XIAOMO_AGENT_USER_ID] + ids,
     )

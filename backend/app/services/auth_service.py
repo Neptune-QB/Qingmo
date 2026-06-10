@@ -185,17 +185,26 @@ def update_user_profile(user_id: int, nickname: str = "", avatar: str = "") -> b
 
 
 def merge_device_data(user_id: int, device_id: str):
-    """将设备维度的互动/进度数据关联到登录用户"""
+    """将设备维度的全部匿名数据关联到登录真实用户"""
     if not device_id:
         return
+    target_uid = str(user_id)
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 关联之前的互动记录
-    cursor.execute(
-        "UPDATE user_interactions SET user_id = ? WHERE user_id = ?",
-        (str(user_id), device_id),
-    )
+    # 全表数据迁移：所有匿名device_id数据全部归属到登录真实用户
+    cursor.execute("UPDATE user_interactions SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_progress SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE episode_likes SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_favorites SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE danmaku SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE episode_comments SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE highlight_vote_records SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_quiz_scores SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE branch_vote_records SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_notes SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_chat_sessions SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
+    cursor.execute("UPDATE user_profiles SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
 
     # 更新 users 表的 device_ids 列表
     cursor.execute("SELECT device_ids FROM users WHERE id = ?", (user_id,))

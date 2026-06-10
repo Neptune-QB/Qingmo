@@ -39,6 +39,12 @@ object TokenManager {
 
     fun getNickname(): String? = prefs?.getString(KEY_NICKNAME, null)
 
+    fun saveAvatar(avatar: String) {
+        prefs?.edit()?.putString(KEY_AVATAR, avatar)?.apply()
+    }
+
+    fun getAvatar(): String? = prefs?.getString(KEY_AVATAR, null)
+
     fun isLoggedIn(): Boolean = getToken() != null
 
     fun clear() {

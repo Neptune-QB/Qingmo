@@ -1,8 +1,15 @@
 package com.qingmo.app.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,22 +22,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -40,6 +47,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -64,42 +73,60 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import coil.compose.AsyncImage
 import com.qingmo.app.data.api.RetrofitClient
 import com.qingmo.app.data.model.DramaBrief
 import com.qingmo.app.data.repository.DramaRepository
 import com.qingmo.app.ui.theme.Background
+import com.qingmo.app.ui.theme.CardIconPurple
+import com.qingmo.app.ui.theme.CardIconTeal
+import com.qingmo.app.ui.theme.DividerLight
+import com.qingmo.app.ui.theme.DividerLighter
 import com.qingmo.app.xiaomo.ui.XiaoMoChatPanel
 import com.qingmo.app.data.chat.ChatMessage
 import com.qingmo.app.data.chat.ChatService
 import com.qingmo.app.data.auth.TokenManager
 import com.qingmo.app.data.user.DeviceIdProvider
 import com.qingmo.app.ui.theme.GradientCyanDark
+import com.qingmo.app.ui.theme.GraphiteTeal
 import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceVariant
 import com.qingmo.app.ui.theme.Primary
 import com.qingmo.app.ui.theme.SurfaceElevated
 import com.qingmo.app.ui.theme.SurfaceVariant
-import kotlinx.coroutines.Dispatchers
+import com.qingmo.app.ui.theme.TextPrimary
+import com.qingmo.app.ui.theme.TextSecondary
+import com.qingmo.app.ui.theme.TextDisabled
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Suppress("ktlint:standard:function-naming")
 @Composable
-fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}) {
+fun DramaListScreen(
+    onDramaClick: (Int) -> Unit,
+    onProfileClick: () -> Unit = {}
+) {
     val repository = remember { DramaRepository() }
     var dramas by remember { mutableStateOf<List<DramaBrief>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val swipeRefreshState = rememberSwipeRefreshState(isRefreshing)
     var error by remember { mutableStateOf<String?>(null) }
     var showXiaoMoPage by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -113,30 +140,39 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
     val context = androidx.compose.ui.platform.LocalContext.current
     val currentUserId = TokenManager.getUserId().takeIf { it > 0 }?.toString() ?: DeviceIdProvider.getDeviceId(context)
 
-    fun loadDramas() {
-        scope.launch {
-            isLoading = true
-            error = null
-            try {
-                val result = repository.getDramas()
-                result
-                    .onSuccess {
-                        dramas = it
-                        if (it.isEmpty()) {
-                            error = "后端返回空列表"
-                        }
+    suspend fun doLoad() {
+        isLoading = true
+        error = null
+        try {
+            val result = repository.getDramas()
+            result
+                .onSuccess {
+                    dramas = it
+                    if (it.isEmpty()) {
+                        error = "后端返回空列表"
                     }
-                    .onFailure {
-                        error = "错误: ${it.message ?: "未知异常"}"
-                    }
-            } catch (e: Throwable) {
-                error = "外层捕获异常: ${e.message ?: e.javaClass.simpleName}"
-            }
-            isLoading = false
+                }
+                .onFailure {
+                    error = "错误: ${it.message ?: "未知异常"}"
+                }
+        } catch (e: Throwable) {
+            error = "外层捕获异常: ${e.message ?: e.javaClass.simpleName}"
         }
+        isLoading = false
     }
 
-    LaunchedEffect(Unit) { loadDramas() }
+    fun loadDramas() {
+        scope.launch { doLoad() }
+    }
+
+    fun refreshDramas() {
+        scope.launch {
+            isRefreshing = true
+            doLoad()
+            delay(500L)
+            isRefreshing = false
+        }
+    }
 
     fun loadSessions() {
         scope.launch(Dispatchers.IO) {
@@ -147,8 +183,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
     }
 
     fun createNewSession() {
-        // 先进入对话，等用户发送第一条消息时才创建会话（用首条消息做标题）
-        selectedSessionId = -1 // 标记为"待创建"
+        selectedSessionId = -1
         selectedSessionTitle = "新对话"
         chatMessages.clear()
     }
@@ -160,7 +195,7 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
         scope.launch(Dispatchers.IO) {
             try {
                 val msgs = RetrofitClient.api.getSessionMessages(selectedSessionId!!)
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     chatMessages.clear()
                     msgs.forEach { msg ->
                         chatMessages.add(ChatMessage(
@@ -186,289 +221,318 @@ fun DramaListScreen(onDramaClick: (Int) -> Unit, onProfileClick: () -> Unit = {}
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    LaunchedEffect(Unit) { loadDramas() }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-                title = {
-                    Text(
-                        "青墨",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
+    Box(Modifier.fillMaxSize()) {
+        SwipeRefresh(
+            state = swipeRefreshState,
+            onRefresh = { refreshDramas() },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+                        title = {
+                            Text(
+                                "青墨",
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = GraphiteTeal,
+                            )
+                        },
+                        actions = {
+                            IconButton(onClick = { showXiaoMoPage = true }) {
+                                Icon(
+                                    Icons.Filled.SmartToy,
+                                    contentDescription = "小墨",
+                                    tint = GraphiteTeal,
+                                )
+                            }
+                            IconButton(onClick = onProfileClick) {
+                                Icon(
+                                    Icons.Filled.Person,
+                                    contentDescription = "我的",
+                                    tint = OnSurface,
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Background,
+                            titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        ),
                     )
                 },
-                actions = {
-                    IconButton(onClick = { showXiaoMoPage = true }) {
-                        Icon(
-                            Icons.Filled.SmartToy,
-                            contentDescription = "小墨",
-                            tint = OnSurface,
+                containerColor = Background,
+            ) { padding ->
+                when {
+                    isLoading && dramas.isEmpty() -> LoadingGrid(Modifier.padding(padding))
+                    error != null ->
+                        ErrorState(
+                            message = error!!,
+                            onRetry = { loadDramas() },
+                            modifier = Modifier.padding(padding),
                         )
-                    }
-                    IconButton(onClick = onProfileClick) {
-                        Icon(
-                            Icons.Filled.Person,
-                            contentDescription = "我的",
-                            tint = OnSurface,
+                    dramas.isEmpty() -> EmptyState(Modifier.padding(padding))
+                    else ->
+                        DramaGrid(
+                            dramas = dramas,
+                            onDramaClick = { id ->
+                                scope.launch {
+                                    delay(150L)
+                                    onDramaClick(id)
+                                }
+                            },
+                            modifier = Modifier.padding(padding),
                         )
-                    }
-                },
-                colors =
-                    TopAppBarDefaults.topAppBarColors(
-                        containerColor = Background,
-                        titleContentColor = MaterialTheme.colorScheme.onBackground,
-                    ),
-            )
-        },
-        containerColor = Background,
-    ) { padding ->
-        when {
-            isLoading -> LoadingGrid(Modifier.padding(padding))
-            error != null ->
-                ErrorState(
-                    message = error!!,
-                    onRetry = { loadDramas() },
-                    modifier = Modifier.padding(padding),
-                )
-            dramas.isEmpty() -> EmptyState(Modifier.padding(padding))
-            else ->
-                DramaGrid(
-                    dramas = dramas,
-                    onDramaClick = onDramaClick,
-                    modifier = Modifier.padding(padding),
-                )
-        }
-    }
-    if (showSettings) {
-        Box(Modifier.fillMaxSize().background(Color(0xFFF7F3EC)).windowInsetsPadding(WindowInsets.statusBars).zIndex(99f)) {
-            Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { showSettings = false }) { Icon(Icons.Filled.Close, "返回", tint = Color(0xFF333333)) }
-                    Spacer(Modifier.width(4.dp))
-                    Text("⚙ 功能设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
                 }
-                Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFEEEEEE)))
-                // 直接渲染设置列表
-                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(horizontal = 16.dp)) {
-                    items(com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size) { idx ->
-                        val feat = com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES[idx]
-                        val key = feat.first; val label = feat.second
-                        var enabled by remember { mutableStateOf(com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled(key)) }
-                        Row(Modifier.fillMaxWidth().height(52.dp).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(label, fontSize = 15.sp, color = Color(0xFF333333))
-                            androidx.compose.material3.Switch(checked = enabled, onCheckedChange = { v -> enabled = v; com.qingmo.app.xiaomo.XiaoMoSettings.setEnabled(key, v) })
+            }
+        }
+
+        if (showSettings) {
+            Box(Modifier.fillMaxSize().background(Background).windowInsetsPadding(WindowInsets.statusBars).zIndex(99f)) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { showSettings = false }) { Icon(Icons.Filled.Close, "返回", tint = TextPrimary) }
+                        Spacer(Modifier.width(4.dp))
+                        Text("⚙ 功能设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    }
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(DividerLight))
+                    LazyColumn(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                        items(com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size) { idx ->
+                            val feat = com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES[idx]
+                            val key = feat.first
+                            val label = feat.second
+                            var enabled by remember { mutableStateOf(com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled(key)) }
+                            Row(Modifier.fillMaxWidth().height(52.dp).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(label, fontSize = 15.sp, color = TextPrimary)
+                                Switch(
+                                    checked = enabled,
+                                    onCheckedChange = { v ->
+                                        enabled = v
+                                        com.qingmo.app.xiaomo.XiaoMoSettings.setEnabled(key, v)
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Primary,
+                                        checkedTrackColor = Primary.copy(alpha = 0.3f),
+                                    )
+                                )
+                            }
+                            if (idx < com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size - 1) {
+                                Box(Modifier.fillMaxWidth().height(0.5.dp).background(DividerLighter))
+                            }
                         }
-                        if (idx < com.qingmo.app.xiaomo.XiaoMoSettings.FEATURES.size - 1) Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFFF0F0F0)))
-                    }
-                    item {
-                        Spacer(Modifier.height(20.dp))
-                        Text("恢复默认设置", fontSize = 14.sp, color = Color(0xFF999999), modifier = Modifier.clickable { com.qingmo.app.xiaomo.XiaoMoSettings.resetAll(); showSettings = false; showSettings = true }.padding(8.dp))
+                        item {
+                            Spacer(Modifier.height(20.dp))
+                            Text(
+                                "恢复默认设置",
+                                fontSize = 14.sp,
+                                color = TextSecondary,
+                                modifier = Modifier.clickable {
+                                    com.qingmo.app.xiaomo.XiaoMoSettings.resetAll()
+                                    showSettings = false
+                                    showSettings = true
+                                }.padding(8.dp)
+                            )
+                        }
                     }
                 }
             }
         }
-    }
 
-    // 小墨功能页面
-    if (showXiaoMoPage && !showSettings) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(Color(0xFFF7F3EC))
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { }
-                .zIndex(99f)
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = { showXiaoMoPage = false; showFullChat = false }) {
-                    Icon(Icons.Filled.Close, "关闭", tint = Color(0xFF333333))
-                }
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    "小墨 AI",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF333333),
-                )
-            }
-
+        if (showXiaoMoPage && !showSettings) {
             Column(
                 Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .fillMaxSize()
+                    .background(Background)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+                    .zIndex(99f)
             ) {
-                // 对话窗口入口
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { loadSessions(); showFullChat = true },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(44.dp).background(Color(0xFF1A535C), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.SmartToy, null, tint = Color.White, modifier = Modifier.size(24.dp))
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("对话窗口", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
-                            Text("与小墨 AI 畅聊剧情", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
-                        }
-                        Icon(Icons.Filled.ChevronRight, null, tint = Color(0xFFBBBBBB))
+                    IconButton(onClick = { showXiaoMoPage = false; showFullChat = false }) {
+                        Icon(Icons.Filled.Close, "关闭", tint = TextPrimary)
                     }
-                }
-                // 功能设置入口
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { showSettings = true },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(44.dp).background(Color(0xFF7C4DFF), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                            Text("\u2699\uFE0F", fontSize = 22.sp)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("功能设置", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333))
-                            Text("管理小墨能力", fontSize = 11.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
-                        }
-                        Icon(Icons.Filled.ChevronRight, null, tint = Color(0xFFBBBBBB))
-                    }
-                }
-            }
-        }
-    }
-
-    // 全屏对话
-    if (showFullChat) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(Color(0xFFF7F3EC))
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { }
-                .zIndex(100f)
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = {
-                    if (selectedSessionId != null) {
-                        selectedSessionId = null
-                        selectedSessionTitle = ""
-                        loadSessions()
-                    } else {
-                        showFullChat = false
-                    }
-                }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color(0xFF333333))
-                }
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    if (selectedSessionId != null) selectedSessionTitle else "小墨 AI",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF333333),
-                )
-            }
-
-            // 会话列表或对话面板
-            if (selectedSessionId != null) {
-                XiaoMoChatPanel(
-                    userId = TokenManager.getUserId().toString(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    externalMessages = chatMessages,
-                    sessionId = selectedSessionId,
-                    onCreateSession = { firstMsg ->
-                        kotlinx.coroutines.withContext(Dispatchers.IO) {
-                            try {
-                                val fallbackTitle = if (firstMsg.length > 10) firstMsg.take(10) + "…" else firstMsg
-                                val resp = RetrofitClient.api.createSession(mapOf(
-                                    "title" to fallbackTitle,
-                                    "user_id" to currentUserId,
-                                ))
-                                val id = (resp["id"] as? Number)?.toInt() ?: -1
-                                if (id > 0) {
-                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                        selectedSessionId = id
-                                        selectedSessionTitle = fallbackTitle
-                                    }
-                                    // 异步用AI生成更好的标题
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            val summary = ChatService.summarizeTitle(firstMsg)
-                                            if (summary.isNotEmpty() && summary != fallbackTitle) {
-                                                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                                    selectedSessionTitle = summary
-                                                }
-                                                RetrofitClient.api.updateSessionTitle(id, mapOf("title" to summary))
-                                            }
-                                        } catch (_: Exception) {}
-                                    }
-                                }
-                                id
-                            } catch (_: Exception) { -1 }
-                        }
-                    },
-                )
-            } else {
-                SessionList(
-                    sessions = sessions,
-                    onNewSession = { createNewSession() },
-                    onOpenSession = { openSession(it) },
-                    onDeleteSession = { deleteSessionId ->
-                        showDeleteDialog = deleteSessionId
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                )
-            }
-        }
-
-        // 删除确认对话框
-        if (showDeleteDialog != null) {
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { showDeleteDialog = null },
-                title = { Text("删除对话") },
-                text = { Text("确定要删除这个对话吗？") },
-                confirmButton = {
+                    Spacer(Modifier.width(4.dp))
                     Text(
-                        "删除",
-                        color = Color(0xFFE53935),
+                        "小墨 AI",
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .clickable {
+                        color = TextPrimary,
+                    )
+                }
+
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable {
+                            loadSessions()
+                            showFullChat = true
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(44.dp).background(CardIconTeal, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Filled.SmartToy, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("和小墨聊天", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                                Text("让小墨帮你快速做选择", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
+                            }
+                            Icon(Icons.Filled.ChevronRight, null, tint = TextDisabled)
+                        }
+                    }
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable {
+                            showSettings = true
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(44.dp).background(CardIconPurple, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Filled.Edit, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("小墨能力", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                                Text("管理小墨能力", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
+                            }
+                            Icon(Icons.Filled.ChevronRight, null, tint = TextDisabled)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showFullChat) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(Background)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+                    .zIndex(100f)
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = {
+                        if (selectedSessionId != null) {
+                            selectedSessionId = null
+                            selectedSessionTitle = ""
+                            loadSessions()
+                        } else {
+                            showFullChat = false
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "小墨 AI",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                    )
+                }
+
+                if (selectedSessionId != null) {
+                    XiaoMoChatPanel(
+                        userId = TokenManager.getUserId().toString(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        externalMessages = chatMessages,
+                        sessionId = selectedSessionId,
+                        onLinkClick = { dramaId ->
+                            showFullChat = false
+                            showXiaoMoPage = false
+                            onDramaClick(dramaId)
+                        },
+                        onCreateSession = { firstMsg ->
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val fallbackTitle = if (firstMsg.length > 10) firstMsg.take(10) + "…" else firstMsg
+                                    val resp = RetrofitClient.api.createSession(mapOf(
+                                        "title" to fallbackTitle,
+                                        "user_id" to currentUserId,
+                                    ))
+                                    val id = (resp["id"] as? Number)?.toInt() ?: -1
+                                    if (id > 0) {
+                                        withContext(Dispatchers.Main) {
+                                            selectedSessionId = id
+                                            selectedSessionTitle = fallbackTitle
+                                        }
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val summary = ChatService.summarizeTitle(firstMsg)
+                                                if (summary.isNotEmpty() && summary != fallbackTitle) {
+                                                    withContext(Dispatchers.Main) {
+                                                        selectedSessionTitle = summary
+                                                    }
+                                                    RetrofitClient.api.updateSessionTitle(id, mapOf("title" to summary))
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
+                                    id
+                                } catch (_: Exception) { -1 }
+                            }
+                        },
+                    )
+                } else {
+                    SessionList(
+                        sessions = sessions,
+                        onNewSession = { createNewSession() },
+                        onOpenSession = { openSession(it) },
+                        onDeleteSession = { deleteSessionId ->
+                            showDeleteDialog = deleteSessionId
+                        },
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
+            }
+
+            if (showDeleteDialog != null) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showDeleteDialog = null },
+                    title = { Text("删除对话") },
+                    text = { Text("确定要删除这个对话吗？") },
+                    confirmButton = {
+                        Text(
+                            "删除",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(8.dp).clickable {
                                 deleteSession(showDeleteDialog!!)
                                 showDeleteDialog = null
-                            },
-                    )
-                },
-                dismissButton = {
-                    Text(
-                        "取消",
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .clickable { showDeleteDialog = null },
-                    )
-                },
-            )
+                            }
+                        )
+                    },
+                    dismissButton = {
+                        Text(
+                            "取消",
+                            modifier = Modifier.padding(8.dp).clickable { showDeleteDialog = null }
+                        )
+                    }
+                )
+            }
         }
-    }
     }
 }
 
@@ -485,7 +549,6 @@ private fun SessionList(
         modifier = modifier.padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // 新对话按钮
         item {
             Card(
                 modifier = Modifier
@@ -507,7 +570,6 @@ private fun SessionList(
             }
         }
 
-        // 历史对话列表
         items(sessions.reversed()) { session ->
             val id = (session["id"] as? Number)?.toInt() ?: return@items
             val title = session["title"] as? String ?: "对话"
@@ -522,7 +584,7 @@ private fun SessionList(
                         onLongClick = { onDeleteSession(id) },
                     ),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
+                colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Row(
@@ -532,25 +594,24 @@ private fun SessionList(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color(0xFF333333))
+                        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
                         if (time.isNotEmpty()) {
-                            Text(time, fontSize = 12.sp, color = Color(0xFF999999), modifier = Modifier.padding(top = 2.dp))
+                            Text(time, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
-                    Icon(Icons.Filled.ChevronRight, null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(20.dp))
+                    Icon(Icons.Filled.ChevronRight, null, tint = TextDisabled, modifier = Modifier.size(20.dp))
                 }
             }
         }
 
-        // 空状态
         if (sessions.isEmpty()) {
             item {
                 Text(
                     "暂无历史对话",
                     fontSize = 14.sp,
-                    color = Color(0xFFBBBBBB),
+                    color = TextDisabled,
                     modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -559,10 +620,28 @@ private fun SessionList(
     }
 }
 
-@Suppress("ktlint:standard:function-naming")
 @Composable
 private fun LoadingGrid(modifier: Modifier = Modifier) {
-    val alpha = 0.4f
+    val shimmerTransition = rememberInfiniteTransition(label = "shimmer")
+    val translateX by shimmerTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1200f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer_x"
+    )
+
+    val shimmerBrush = Brush.horizontalGradient(
+        colors = listOf(
+            SurfaceVariant.copy(alpha = 0.3f),
+            SurfaceVariant.copy(alpha = 0.8f),
+            SurfaceVariant.copy(alpha = 0.3f),
+        ),
+        startX = -300f + translateX,
+        endX = 300f + translateX,
+    )
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -583,15 +662,7 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                         Modifier
                             .fillMaxWidth()
                             .aspectRatio(0.75f)
-                            .background(
-                                Brush.verticalGradient(
-                                    colors =
-                                        listOf(
-                                            SurfaceVariant.copy(alpha = alpha),
-                                            Background.copy(alpha = alpha + 0.1f),
-                                        ),
-                                ),
-                            ),
+                            .background(shimmerBrush),
                     )
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                         Box(
@@ -599,7 +670,7 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                                 .fillMaxWidth(0.75f)
                                 .height(14.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceVariant.copy(alpha = alpha)),
+                                .background(shimmerBrush),
                         )
                         Spacer(Modifier.height(8.dp))
                         Box(
@@ -607,7 +678,7 @@ private fun LoadingGrid(modifier: Modifier = Modifier) {
                                 .fillMaxWidth(0.45f)
                                 .height(10.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceVariant.copy(alpha = alpha * 0.7f)),
+                                .background(shimmerBrush),
                         )
                     }
                 }
@@ -639,11 +710,10 @@ private fun ErrorState(
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = onRetry,
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = Primary,
-                        contentColor = Color.White,
-                    ),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Primary,
+                    contentColor = Color.White,
+                ),
                 shape = RoundedCornerShape(12.dp),
             ) {
                 Text("重试")
@@ -696,30 +766,27 @@ private fun DramaCard(
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.96f else 1f,
-        animationSpec =
-            spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessMedium,
-            ),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium,
+        ),
         label = "card_scale",
     )
 
     Card(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .scale(scale)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClick,
-                ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(scale)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { pressed = true; onClick() }
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column {
-            // --- 封面图 + 渐变叠加 ---
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -731,7 +798,6 @@ private fun DramaCard(
                     modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)),
                     contentScale = ContentScale.Crop,
                 )
-                // 底部渐变叠加，让文字更清晰
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -739,7 +805,6 @@ private fun DramaCard(
                         .align(Alignment.BottomCenter)
                         .background(GradientCyanDark),
                 )
-                // 集数标签
                 if (drama.episodeCount > 0) {
                     Surface(
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
@@ -756,7 +821,6 @@ private fun DramaCard(
                     }
                 }
             }
-            // --- 标题 + 标签 ---
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(
                     drama.title,
@@ -769,7 +833,7 @@ private fun DramaCard(
                 if (!drama.tags.isNullOrEmpty()) {
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        drama.tags.take(2).forEach { tag ->
+                        drama.tags.take(3).forEach { tag ->
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = Primary.copy(alpha = 0.08f),

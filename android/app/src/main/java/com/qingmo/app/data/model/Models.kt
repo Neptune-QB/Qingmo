@@ -30,6 +30,7 @@ data class DramaDetail(
     val coverUrl: String,
     val tags: List<String>? = null,
     val episodes: List<EpisodeBrief>,
+    @SerializedName("fav_count") val favCount: Int = 0,
 )
 
 @Immutable

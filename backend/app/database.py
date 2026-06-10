@@ -20,18 +20,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS dramas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
-            author TEXT DEFAULT '',
             description TEXT DEFAULT '',
             cover_url TEXT DEFAULT '',
-            category TEXT DEFAULT '',
-            total_episodes INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS drama_tags (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            drama_id INTEGER NOT NULL,
-            tag TEXT NOT NULL,
-            FOREIGN KEY (drama_id) REFERENCES dramas(id)
+            total_episodes INTEGER DEFAULT 0,
+            tags TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS episodes (
@@ -334,6 +326,44 @@ def migrate_add_columns():
         cursor.execute("ALTER TABLE user_progress ADD COLUMN user_id TEXT NOT NULL DEFAULT '0'")
     except sqlite3.OperationalError:
         pass
+
+    # dramas 表新增 tags 字段（合并原来的独立 drama_tags 表）
+    try:
+        cursor.execute("ALTER TABLE dramas ADD COLUMN tags TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # 安全迁移：移除冗余 author / category 字段，SQLite 不支持直接 DROP COLUMN，用重建表方式
+    try:
+        cursor.execute("PRAGMA table_info(dramas)")
+        cols = [c["name"] for c in cursor.fetchall()]
+        if "author" in cols or "category" in cols:
+            cursor.execute("ALTER TABLE dramas RENAME TO dramas_old")
+            cursor.execute("""
+                CREATE TABLE dramas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    cover_url TEXT DEFAULT '',
+                    total_episodes INTEGER DEFAULT 0,
+                    tags TEXT DEFAULT ''
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO dramas(id, title, description, cover_url, total_episodes, tags)
+                SELECT id, title, description, cover_url, total_episodes, tags FROM dramas_old
+            """)
+            cursor.execute("DROP TABLE dramas_old")
+            print("[MIGRATION] 已移除冗余 author 和 category 字段，表结构简化完成")
+    except Exception:
+        pass
+
+    # 自动统计更新真实 total_episodes：完全由 episodes 实际数量计算，零硬编码
+    cursor.execute("""
+        UPDATE dramas SET total_episodes = (
+            SELECT COUNT(*) FROM episodes WHERE episodes.drama_id = dramas.id
+        )
+    """)
 
     conn.commit()
     conn.close()

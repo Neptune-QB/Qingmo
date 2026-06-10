@@ -62,8 +62,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
@@ -92,6 +96,8 @@ import com.qingmo.app.data.model.EpisodeBrief
 import com.qingmo.app.data.repository.DramaRepository
 import com.qingmo.app.ui.theme.Background
 import com.qingmo.app.ui.theme.Border
+import com.qingmo.app.ui.theme.GraphiteTeal
+import com.qingmo.app.ui.theme.GraphiteTealSoft
 import com.qingmo.app.ui.theme.OnBackground
 import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceVariant
@@ -861,6 +867,7 @@ private class NativeAdapter(
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
     private val favoritedDramaIds = mutableSetOf<Int>()
+    private var globalCurrentDramaFavCount = 0
 
     fun setDanmakuEnabled(enabled: Boolean) {
         danmakuGlobalEnabled = enabled
@@ -1301,36 +1308,47 @@ private class NativeAdapter(
                     val favList = RetrofitClient.api.getFavorites(userId)
                     val favIds = favList.mapNotNull { (it["drama_id"] as? Number)?.toInt() }
                     favoritedDramaIds.clear(); favoritedDramaIds.addAll(favIds)
+                    val currentDramaId = detail.id.toInt()
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        for (i in 0 until viewHolders.size()) {
+                            val vh = viewHolders.valueAt(i)
+                            val loadedIsFav = currentDramaId in favoritedDramaIds
+                            vh.isFavorited = loadedIsFav
+                            vh.favoriteIv.setImageResource(if (loadedIsFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                        }
+                    }
                 } catch (_: Exception) {}
             }
         }
         val isFav = did in favoritedDramaIds
         h.isFavorited = isFav
         h.favoriteIv.setImageResource(if (isFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
-        h.favoriteLabel.text = formatCount(favoritedDramaIds.size)
+        if (globalCurrentDramaFavCount == 0) globalCurrentDramaFavCount = detail.favCount
+        h.favoriteLabel.text = formatCount(globalCurrentDramaFavCount)
         h.favoritesLoaded = true
         rg.getChildAt(0).setOnClickListener {
             if (!h.favoritesLoaded) return@setOnClickListener
-            h.isFavorited = !h.isFavorited
+            val newIsFav = !h.isFavorited
             val didLocal = detail.id.toInt()
-            if (h.isFavorited) favoritedDramaIds.add(didLocal) else favoritedDramaIds.remove(didLocal)
-            // 同步刷新所有ViewHolder的收藏图标
+            // 本地乐观先给用户点击反馈
+            if (newIsFav) favoritedDramaIds.add(didLocal) else favoritedDramaIds.remove(didLocal)
+            if (newIsFav) globalCurrentDramaFavCount += 1 else globalCurrentDramaFavCount = kotlin.math.max(0, globalCurrentDramaFavCount - 1)
             for (i in 0 until viewHolders.size()) {
                 val vh = viewHolders.valueAt(i)
                 val pos = viewHolders.keyAt(i)
                 if (pos < eps.size) {
-                    vh.isFavorited = h.isFavorited
-                    vh.favoriteIv.setImageResource(if (h.isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                    vh.isFavorited = newIsFav
+                    vh.favoriteIv.setImageResource(if (newIsFav) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
+                    vh.favoriteLabel.text = formatCount(globalCurrentDramaFavCount)
                 }
             }
-            // 乐观更新收藏数
-            val cur = h.favoriteLabel.text.toString().toIntOrNull() ?: 0
-            h.favoriteLabel.text = formatCount(if (h.isFavorited) cur + 1 else cur - 1)
-            h.favoriteIv.setImageResource(if (h.isFavorited) com.qingmo.app.R.drawable.starred else com.qingmo.app.R.drawable.unstarred)
             h.favoriteIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
                 h.favoriteIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
             }.start()
             onFavoriteClick?.invoke(detail.id.toLong())
+            scope.launch(Dispatchers.IO) {
+                try { RetrofitClient.api.toggleFavorite(didLocal, mapOf("user_id" to userId)) } catch (_: Exception) { }
+            }
         }
         // 评论按钮 就是review.png图标 绝对正确位置
         rg.getChildAt(1).setOnClickListener {
@@ -1935,13 +1953,13 @@ private fun ESheet(
                                 val watched = ProgressCache.isWatched(ep.episodeId)
                                 val bgColor =
                                     when {
-                                        cur -> Primary.copy(alpha = 0.12f)
+                                        cur -> GraphiteTealSoft
                                         watched -> SurfaceVariant.copy(alpha = 0.5f)
                                         else -> Color.White
                                     }
                                 val textColor =
                                     when {
-                                        cur -> Primary
+                                        cur -> GraphiteTeal
                                         watched -> OnSurfaceVariant
                                         else -> OnSurface
                                     }
@@ -1949,7 +1967,7 @@ private fun ESheet(
                                     if (cur) {
                                         BorderStroke(
                                             1.dp,
-                                            Primary,
+                                            GraphiteTeal,
                                         )
                                     } else {
                                         BorderStroke(0.5.dp, Border)
@@ -2100,9 +2118,49 @@ private fun CommentItem(
     // 顶级评论无缩进，所有子回复统一全局16dp缩进，永远不叠加
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            Surface(shape = CircleShape, color = if (isXiaomo) Color(0xFF7C4DFF) else Color(0xFFE8F6F7), modifier = Modifier.size(avatarSize)) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(nickname.first().uppercase(), color = Color.White, fontSize = avatarFont, fontWeight = FontWeight.Bold)
+            if (isXiaomo) {
+                coil.compose.AsyncImage(
+                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                        .data(com.qingmo.app.R.drawable.xiaomo_chat)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "小墨",
+                    modifier = Modifier.size(avatarSize).clip(CircleShape),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            } else if (isMine) {
+                val ctx = LocalContext.current
+                val scope = rememberCoroutineScope()
+                var myAvatarBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+                LaunchedEffect(Unit) {
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val avatarStr = com.qingmo.app.data.auth.TokenManager.getAvatar() ?: ""
+                        if (avatarStr.isNotEmpty()) {
+                            try {
+                                val base64Part = avatarStr.removePrefix("data:image/jpeg;base64,")
+                                val bytes = java.util.Base64.getDecoder().decode(base64Part)
+                                myAvatarBmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                Box(modifier = Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFFE8F6F7)), contentAlignment = Alignment.Center) {
+                    myAvatarBmp?.let { bmp ->
+                        AsyncImage(
+                            model = ImageRequest.Builder(ctx).data(bmp).crossfade(true).build(),
+                            contentDescription = "我的头像",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } ?: run {
+                        Text(nickname.first().uppercase(), color = Color.White, fontSize = avatarFont, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                Surface(shape = CircleShape, color = Color(0xFFE8F6F7), modifier = Modifier.size(avatarSize)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(nickname.first().uppercase(), color = Color.White, fontSize = avatarFont, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             Spacer(Modifier.width(10.dp))
@@ -2180,9 +2238,39 @@ private fun ReplyItem(
 
     Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            Surface(shape = CircleShape, color = Color(0xFFE3F2FD), modifier = Modifier.size(32.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            if (rIsMine) {
+                val ctx = LocalContext.current
+                val scope = rememberCoroutineScope()
+                var myReplyAvatarBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+                LaunchedEffect(Unit) {
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val avatarStr = com.qingmo.app.data.auth.TokenManager.getAvatar() ?: ""
+                        if (avatarStr.isNotEmpty()) {
+                            try {
+                                val base64Part = avatarStr.removePrefix("data:image/jpeg;base64,")
+                                val bytes = java.util.Base64.getDecoder().decode(base64Part)
+                                myReplyAvatarBmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFFE3F2FD)), contentAlignment = Alignment.Center) {
+                    myReplyAvatarBmp?.let { bmp ->
+                        AsyncImage(
+                            model = ImageRequest.Builder(ctx).data(bmp).crossfade(true).build(),
+                            contentDescription = "我的头像",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } ?: run {
+                        Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                Surface(shape = CircleShape, color = Color(0xFFE3F2FD), modifier = Modifier.size(32.dp)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(rNick.first().uppercase(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             Spacer(Modifier.width(10.dp))
@@ -2624,7 +2712,11 @@ private fun DiscussionSheet(
                         }
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("发布", fontSize = 14.sp, color = if (inputText.trim().isNotEmpty()) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = inputText.trim().isNotEmpty()) {
+                    Text("发布", fontSize = 14.sp, color = if (inputText.trim().isNotEmpty()) GraphiteTeal else Color(0xFFBBBBBB), fontWeight = androidx.compose.ui.text.font.FontWeight.Medium, modifier = Modifier.clickable(
+                        interactionSource = null,
+                        indication = null,
+                        enabled = inputText.trim().isNotEmpty()
+                    ) {
                         val pureText = inputText.trim()
                         if (pureText.isEmpty()) return@clickable
                         val isAtXiaomo = pureText.startsWith("@小墨", ignoreCase = true)

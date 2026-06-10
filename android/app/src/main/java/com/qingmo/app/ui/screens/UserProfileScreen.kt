@@ -1,5 +1,14 @@
 package com.qingmo.app.ui.screens
 
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,18 +28,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.qingmo.app.data.api.RetrofitClient
 import com.qingmo.app.data.auth.TokenManager
+import com.qingmo.app.data.api.RetrofitClient
 import com.qingmo.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 
 @Composable
 fun UserProfileScreen(
@@ -46,8 +58,69 @@ fun UserProfileScreen(
     var editingName by remember { mutableStateOf(false) }
     var editText by remember { mutableStateOf(nickname) }
     var displayName by remember { mutableStateOf(nickname) }
+    var avatarUrl by remember { mutableStateOf(TokenManager.getAvatar() ?: "") }
+    var avatarBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val scope = rememberCoroutineScope()
-    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val ctx = LocalContext.current
+
+    LaunchedEffect(avatarUrl) {
+        if (avatarUrl.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val base64Part = avatarUrl.removePrefix("data:image/jpeg;base64,")
+                    val bytes = java.util.Base64.getDecoder().decode(base64Part)
+                    avatarBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } catch (_: Exception) {}
+            }
+        } else {
+            avatarBitmap = null
+        }
+    }
+
+    var pendingRawUri by remember { mutableStateOf<Uri?>(null) }
+    val pickImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { pendingRawUri = it }
+    }
+    val cropLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.extras?.get("data")?.let { croppedBitmap ->
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val bitmap = croppedBitmap as Bitmap
+                        val bos = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bos)
+                        val base64 = Base64.getEncoder().encodeToString(bos.toByteArray())
+                        val dataUri = "data:image/jpeg;base64,$base64"
+                        RetrofitClient.api.updateMe(mapOf("avatar" to dataUri))
+                        withContext(Dispatchers.Main) {
+                            avatarUrl = dataUri
+                            TokenManager.saveAvatar(dataUri)
+                            android.widget.Toast.makeText(ctx, "头像上传成功", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            android.widget.Toast.makeText(ctx, "上传失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+        pendingRawUri = null
+    }
+    LaunchedEffect(pendingRawUri) {
+        pendingRawUri?.let { uri ->
+            val cropIntent = Intent("com.android.camera.action.CROP")
+            cropIntent.setDataAndType(uri, "image/*")
+            cropIntent.putExtra("crop", "true")
+            cropIntent.putExtra("aspectX", 1)
+            cropIntent.putExtra("aspectY", 1)
+            cropIntent.putExtra("outputX", 256)
+            cropIntent.putExtra("outputY", 256)
+            cropIntent.putExtra("return-data", true)
+            cropIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            cropLauncher.launch(Intent.createChooser(cropIntent, "裁剪头像"))
+        }
+    }
 
     var currentPage by remember { mutableStateOf("main") }
     var watchHistory by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
@@ -91,9 +164,8 @@ fun UserProfileScreen(
                             val dramaId = (r["drama_id"] as? Number)?.toInt() ?: 0
                             val epId = (r["episode_id"] as? Number)?.toInt() ?: 0
                             val title = r["drama_title"] as? String ?: ""
-                            val cover = r["cover_url"] as? String ?: ""
-                            val thumb = r["thumbnail_url"] as? String ?: ""
-                            val img = if (thumb.isNotEmpty()) thumb else cover
+                            val videoUrl = r["video_url"] as? String ?: ""
+                            val fallbackCover = r["cover_url"] as? String ?: ""
                             val epNum = r["episode_num"] ?: ""
                             Card(
                                 modifier = Modifier.fillMaxWidth().clickable { if (dramaId > 0 && epId > 0) onEpisodeClick(dramaId, epId) },
@@ -103,8 +175,19 @@ fun UserProfileScreen(
                             ) {
                                 Column {
                                     Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)).background(Color(0xFF1A535C).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                                        if (img.isNotEmpty()) {
-                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(img)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        val resolvedVideo = RetrofitClient.resolveMediaUrl(videoUrl)
+                                        if (videoUrl.isNotEmpty()) {
+                                            AsyncImage(
+                                                model = ImageRequest.Builder(ctx)
+                                                    .data(resolvedVideo)
+                                                    .crossfade(true)
+                                                    .build(),
+                                                contentDescription = null,
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else if (fallbackCover.isNotEmpty()) {
+                                            AsyncImage(model = ImageRequest.Builder(ctx).data(RetrofitClient.resolveMediaUrl(fallbackCover)).crossfade(true).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                                         } else {
                                             Text(title.take(3), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary.copy(alpha = 0.4f))
                                         }
@@ -187,8 +270,19 @@ fun UserProfileScreen(
 
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(16.dp)).background(SurfaceVariant.copy(alpha = 0.3f)).padding(20.dp)) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Box(Modifier.size(72.dp).clip(CircleShape).background(Primary.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
-                    Text(displayName.take(1), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Primary)
+                Box(Modifier.size(72.dp).clip(CircleShape).background(Primary.copy(alpha = 0.15f)).clickable {
+                    pickImageLauncher.launch("image/*")
+                }, contentAlignment = Alignment.Center) {
+                    avatarBitmap?.let { bmp ->
+                        AsyncImage(
+                            model = ImageRequest.Builder(ctx).data(bmp).crossfade(true).build(),
+                            contentDescription = "头像",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } ?: run {
+                        Text(displayName.take(1), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Primary)
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 if (editingName) {

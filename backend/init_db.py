@@ -100,24 +100,21 @@ def seed():
         # Clear existing data
         cursor.execute("DELETE FROM highlights")
         cursor.execute("DELETE FROM episodes")
-        cursor.execute("DELETE FROM drama_tags")
         cursor.execute("DELETE FROM dramas")
 
         for i, drama in enumerate(dramas):
             title = drama["name"]
-            author = drama["author"]
             description = drama["description"]
             cover_url = drama["cover_url"]
             tags = drama.get("tags", [])
+            tags_str = "/".join(tags)
             episode_count = drama.get("episodes", 50)
             chapter_titles = drama.get("chapter_titles", [])
 
             cursor.execute(
-                "INSERT INTO dramas (id, title, author, description, cover_url, category, total_episodes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (i + 1, title, author, description, cover_url, tags[0] if tags else "", episode_count),
+                "INSERT INTO dramas (id, title, description, cover_url, total_episodes, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                (i + 1, title, description, cover_url, episode_count, tags_str),
             )
-            for tag in tags[:5]:
-                cursor.execute("INSERT INTO drama_tags (drama_id, tag) VALUES (?, ?)", (i + 1, tag))
 
             for ep_num in range(1, episode_count + 1):
                 ep_id = i * 1000 + ep_num

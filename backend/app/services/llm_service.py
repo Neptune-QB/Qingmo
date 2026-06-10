@@ -282,13 +282,12 @@ def search_dramas(query: str, limit: int = 5) -> list[dict]:
         conditions = []
         params = []
         for kw in keywords:
-            conditions.append("(d.title LIKE ? OR dt.tag LIKE ?)")
+            conditions.append("(d.title LIKE ? OR d.tags LIKE ?)")
             params.extend([f"%{kw}%", f"%{kw}%"])
         where = " OR ".join(conditions)
         sql = f"""
-            SELECT DISTINCT d.id, d.title, d.cover_url, d.total_episodes
+            SELECT d.id, d.title, d.cover_url, d.total_episodes, d.tags
             FROM dramas d
-            LEFT JOIN drama_tags dt ON d.id = dt.drama_id
             WHERE {where}
             ORDER BY d.total_episodes DESC
             LIMIT ?
@@ -299,13 +298,13 @@ def search_dramas(query: str, limit: int = 5) -> list[dict]:
     rows = cursor.fetchall()
     # LIKE 查询无结果时回退到兜底热门推荐，避免"给我推荐几部"这种口语化表达被清成无效关键词后返回空
     if not rows:
-        cursor.execute("SELECT id, title, cover_url, total_episodes FROM dramas ORDER BY total_episodes DESC LIMIT ?", (limit,))
+        cursor.execute("SELECT id, title, cover_url, total_episodes, tags FROM dramas ORDER BY total_episodes DESC LIMIT ?", (limit,))
         rows = cursor.fetchall()
 
     result = []
     for r in rows:
-        cursor.execute("SELECT tag FROM drama_tags WHERE drama_id = ?", (r["id"],))
-        tags = [t["tag"] for t in cursor.fetchall()]
+        tags_str = r["tags"]
+        tags = [t.strip() for t in tags_str.split("/") if t.strip()] if tags_str else []
         result.append({
             "id": r["id"],
             "title": r["title"],
