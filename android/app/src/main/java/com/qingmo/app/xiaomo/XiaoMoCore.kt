@@ -1,6 +1,6 @@
 package com.qingmo.app.xiaomo
 
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -18,20 +18,70 @@ object XiaoMoCore {
     private val _state = MutableStateFlow(XiaoMoStateData())
     val state: StateFlow<XiaoMoStateData> = _state.asStateFlow()
 
+    // ---- GIF displayCode 系统（code-based，替代 URL） ----
+    private val _displayCode = MutableStateFlow("idle")
+    val displayCode: StateFlow<String> = _displayCode.asStateFlow()
+    private var effectLockUntil = 0L
+    private var _effectResetJob: Job? = null
+
+    /** 设置高光特效 GIF code，锁定 4000ms 后自动回 idle */
+    fun triggerEffect(code: String) {
+        val now = System.currentTimeMillis()
+        if (now >= effectLockUntil || _displayCode.value == "idle") {
+            _displayCode.value = code
+            effectLockUntil = now + 4000
+            android.util.Log.d("XiaoMoGif", "triggerEffect code=$code lockUntil=$effectLockUntil")
+            // 锁过期后自动回 idle
+            _effectResetJob?.cancel()
+            _effectResetJob = GlobalScope.launch(Dispatchers.Main) {
+                delay(effectLockUntil - now)
+                setIdle()
+            }
+        }
+    }
+
+    /** 回到 idle，仅在锁过期后生效 */
+    fun setIdle() {
+        val now = System.currentTimeMillis()
+        if (now < effectLockUntil) {
+            android.util.Log.d("XiaoMoGif", "setIdle BLOCKED locked until=$effectLockUntil now=$now")
+            return
+        }
+        _effectResetJob?.cancel()
+        _effectResetJob = null
+        _displayCode.value = "idle"
+        android.util.Log.d("XiaoMoGif", "setIdle OK displayCode=idle")
+    }
+
+    // ---- 旧版 gifUrl（保留向后兼容） ----
+    private val _gifUrl = MutableStateFlow<String?>(null)
+    val gifUrl: StateFlow<String?> = _gifUrl.asStateFlow()
+    private var gifLockUntil = 0L
+    fun setGifUrl(url: String?) {
+        if (url == null && System.currentTimeMillis() < gifLockUntil) return
+        _gifUrl.value = url
+        if (url != null) gifLockUntil = System.currentTimeMillis() + 4000
+    }
+
     private var _hintDismissTimer: Job? = null
 
     // ---- 高光时刻一键弹幕互动 ----
     private val bubbleMap = mapOf(
-        "conflict" to "哇塞这也太刺激了！",
-        "twist" to "完全没想到啊！",
-        "sweet" to "磕到了磕到了🥰",
-        "funny" to "笑不活了家人们😂",
-        "famous" to "名场面来了！盯紧屏幕！",
+        "cliffhanger" to "悬念拉满了！",
+        "choice_point" to "你会怎么选？",
+        "emotional_burst" to "破防了破防了😭",
+        "power_moment" to "燃起来了🔥",
+        "comedy" to "笑不活了家人们😂",
+        "suspense" to "紧张到窒息...",
+        "heartbreak" to "刀子来得太快💔",
+        "sweet_moment" to "磕到了磕到了🥰",
+        "reversal" to "完全没想到啊！",
+        "slapback" to "打脸来得太快！",
     )
 
-    fun triggerDanmakuHint(highlight: HighlightItem) {
+    fun triggerDanmakuHint(highlight: DramaHighlight) {
         _hintDismissTimer?.cancel()
-        val bubble = bubbleMap[highlight.type] ?: highlight.title
+        val bubble = bubbleMap[highlight.highlightType] ?: highlight.title
         _state.value = _state.value.copy(
             pose = XiaoMoPose.Shaking,
             pendingDanmakuHighlight = highlight,
@@ -92,6 +142,10 @@ object XiaoMoCore {
     fun onExitPlayer() {
         _greetTimer?.cancel()
         _greetTimer = null
+        _effectResetJob?.cancel()
+        _effectResetJob = null
+        _displayCode.value = "idle"
+        effectLockUntil = 0L
         _state.value = XiaoMoStateData()
         _moduleResultCallback = null
     }
@@ -121,7 +175,7 @@ object XiaoMoCore {
     }
 
     /** 触发互动模块 */
-    fun triggerInteraction(highlight: HighlightItem, moduleId: String) {
+    fun triggerInteraction(highlight: DramaHighlight, moduleId: String) {
         _state.value = _state.value.copy(
             state = XiaoMoState.Interacting,
             currentModuleId = moduleId,

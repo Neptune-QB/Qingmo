@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -129,6 +133,13 @@ private const val C_WHITE70 = 0xB3FFFFFF.toInt()
 private const val C_WHITE85 = 0xD9FFFFFF.toInt()
 private const val C_WHITE20 = 0x33FFFFFF
 private const val C_DARK_BG = 0xFF18181A.toInt()
+
+private fun truncateDesc(text: String, expanded: Boolean): String {
+    if (text.isEmpty()) return ""
+    if (expanded) return text
+    val maxChars = 28
+    return if (text.length > maxChars) text.take(maxChars) + "...展开" else text
+}
 
 @Suppress("ktlint:standard:function-naming")
 @Composable
@@ -271,6 +282,13 @@ private fun Pager(
                 }
                 it.onDanmakuClick = { showDanmakuInput = true }
                 it.userId = userId
+                it.onActiveHighlightChanged = { hl ->
+                    if (hl != null && hl.xiaomoGifCode.isNotEmpty()) {
+                        XiaoMoCore.triggerEffect(hl.xiaomoGifCode)
+                    } else {
+                        XiaoMoCore.setIdle()
+                    }
+                }
             }
         }
     LaunchedEffect(Unit) {
@@ -383,45 +401,55 @@ private fun Pager(
             }, { showSpd = false })
         }
 
-        // 小墨 Peek — 右侧栏上方 (含对话气泡)
+        // 小墨 Peek — 长按拖动 + 位置持久化
         if (!fullscreen && showXiaoMo && !xiaoMoExpanded) {
             val xiaoMoState by XiaoMoCore.state.collectAsState()
-            Row(
+            val sp = remember { ctx.getSharedPreferences("qingmo_xiaomo", Context.MODE_PRIVATE) }
+            var dragX by remember { mutableFloatStateOf(sp.getFloat("dragX", 0f)) }
+            var dragY by remember { mutableFloatStateOf(sp.getFloat("dragY", 0f)) }
+            val currentDisplayCode by XiaoMoCore.displayCode.collectAsState()
+            Log.d("XiaoMoGif", "state=${xiaoMoState.state} displayCode=$currentDisplayCode displayResId=${com.qingmo.app.xiaomo.getXiaomoGifResId(currentDisplayCode)}")
+            val screenWidthPx = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
+            val xiaoMoOnLeft = dragX < -(screenWidthPx / 2)
+            Box(
                 Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(bottom = 240.dp, end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 高光点对话气泡
-                if (xiaoMoState.bubbleText.isNotEmpty()) {
-                    val bubbleAlpha by androidx.compose.animation.core.animateFloatAsState(
-                        targetValue = if (xiaoMoState.bubbleText.isNotEmpty()) 1f else 0f,
-                        animationSpec = androidx.compose.animation.core.tween(300),
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color.White.copy(alpha = 0.92f * bubbleAlpha),
-                        modifier = Modifier.padding(end = 6.dp).alpha(bubbleAlpha),
-                        shadowElevation = 4.dp,
-                    ) {
-                        Text(
-                            xiaoMoState.bubbleText,
-                            fontSize = 14.sp,
-                            color = Color(0xFF333333),
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            maxLines = 2,
+                    .padding(bottom = 240.dp, end = 8.dp)
+                    .offset { IntOffset(dragX.roundToInt(), dragY.roundToInt()) }
+                    .pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {},
+                            onDrag = { _, dragAmount ->
+                                dragX += dragAmount.x; dragY += dragAmount.y
+                            },
+                            onDragEnd = {
+                                sp.edit().putFloat("dragX", dragX).putFloat("dragY", dragY).apply()
+                            },
+                            onDragCancel = {},
                         )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                // 高光气泡 — 小墨头顶偏左或偏右
+                if (xiaoMoState.bubbleText.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(x = if (xiaoMoOnLeft) 40.dp else (-40).dp, y = (-12).dp)
+                    ) {
+                        XiaoMoBubble(xiaoMoState.bubbleText)
                     }
                 }
                 XiaoMoPeekView(
                     visible = true,
-                    pose = xiaoMoState.pose,
                     emotion = xiaoMoState.emotion,
+                    gifCode = currentDisplayCode,
                     onClick = { xiaoMoExpanded = true },
                 )
             }
 
-            // 一键弹幕浮层：高光点触发后，在小墨下方弹出互动面板
+            // 一键弹幕浮层：高光点触发后，在小墨下方弹出互动面板（DISABLED）
+            /* DISABLED
             val pendingHL = xiaoMoState.pendingDanmakuHighlight
             if (pendingHL != null) {
                 val scope = rememberCoroutineScope()
@@ -445,18 +473,6 @@ private fun Pager(
                                 voteCounts = ((v["vote"] as? Map<String, Any>)?.get("counts") as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { (it.value as? Number)?.toInt() ?: 0 } ?: mapOf("a" to 0, "b" to 0)
                                 myVote = (v["vote"] as? Map<String, Any>)?.get("my_choice") as? String
                                 showMode = "vote"
-                            }
-                        } catch (_: Exception) {}
-                    }
-                    }
-                    // 检查问答
-                    if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_quiz")) {
-                        kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        try {
-                            val q = RetrofitClient.api.getHighlightQuiz(pendingHL.id)
-                            if (q["quiz"] != null) {
-                                quizData = q["quiz"] as? Map<String, Any>
-                                showMode = "quiz"
                             }
                         } catch (_: Exception) {}
                     }
@@ -498,6 +514,18 @@ private fun Pager(
                                                             if (newCounts != null) {
                                                                 voteCounts = newCounts.mapKeys { it.key.toString() }.mapValues { (it.value as? Number)?.toInt() ?: 0 }
                                                             }
+                                                        } catch (_: Exception) {}
+                                                        // 互动上报
+                                                        try {
+                                                            RetrofitClient.api.reportInteraction(mapOf(
+                                                                "device_id" to userId,
+                                                                "drama_id" to detail.id,
+                                                                "episode_id" to pendingHL.episodeId,
+                                                                "highlight_id" to pendingHL.id,
+                                                                "interaction_type" to "reaction_panel",
+                                                                "option_key" to key,
+                                                                "option_label" to label,
+                                                            ))
                                                         } catch (_: Exception) {}
                                                     }
                                                 },
@@ -620,7 +648,7 @@ private fun Pager(
                         }
                     }
                 }
-            }
+            DISABLED */
         }
 
         // 小墨聊天底部抽屉 — 和评论界面完全一致风格
@@ -832,6 +860,26 @@ private fun formatCount(n: Int): String = when {
     else -> "0"
 }
 
+@Composable
+private fun XiaoMoBubble(text: String) {
+    if (text.isEmpty()) return
+    val bubbleAlpha by androidx.compose.animation.core.animateFloatAsState(1f, tween(300))
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.White.copy(alpha = 0.92f * bubbleAlpha),
+        modifier = Modifier.padding(horizontal = 6.dp).alpha(bubbleAlpha),
+        shadowElevation = 4.dp,
+    ) {
+        Text(
+            text,
+            fontSize = 14.sp,
+            color = Color(0xFF333333),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            maxLines = 2,
+        )
+    }
+}
+
 private class NativeAdapter(
     private val ctx: Context,
     private val dm: android.util.DisplayMetrics,
@@ -862,8 +910,10 @@ private class NativeAdapter(
     private val viewHolders = SparseArray<VH>()
     private val d = dm.density
     private var danmakuGlobalEnabled = true
-    private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.HighlightItem>>()
+    private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.DramaHighlight>>()
     private val triggeredSet = mutableSetOf<Int>()
+    var onActiveHighlightChanged: ((com.qingmo.app.data.model.DramaHighlight?) -> Unit)? = null
+    private var lastActiveHlId: Int? = null
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
     private val favoritedDramaIds = mutableSetOf<Int>()
@@ -1119,32 +1169,29 @@ private class NativeAdapter(
         bi.addView(Space(c).apply { minimumHeight = dp(6f) })
         bi.addView(
             makeTv(detail.title, 18f, C_WHITE, true).apply {
+                maxWidth = (dm.widthPixels * 4 / 5)
                 maxLines = 1
-                ellipsize =
-                    android.text.TextUtils.TruncateAt.END
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 setOnClickListener { onGoDetail() }
             },
+            LinearLayout.LayoutParams(-2, -2),
         )
         bi.addView(Space(c).apply { minimumHeight = dp(2f) })
+        val fullDesc = detail.description ?: ""
         val descTv =
-            makeTv(detail.description ?: "", 13f, C_WHITE70).apply {
+            makeTv("", 13f, C_WHITE70).apply {
+                maxWidth = (dm.widthPixels * 4 / 5)
                 maxLines = 1
-                ellipsize =
-                    android.text.TextUtils.TruncateAt.END
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                var expanded = false
+                text = truncateDesc(fullDesc, expanded)
                 setOnClickListener {
-                    if (maxLines ==
-                        1
-                    ) {
-                        maxLines = 99
-                        ellipsize = null
-                    } else {
-                        maxLines = 1
-                        ellipsize =
-                            android.text.TextUtils.TruncateAt.END
-                    }
+                    expanded = !expanded
+                    text = truncateDesc(fullDesc, expanded)
+                    maxLines = if (expanded) 99 else 1
                 }
             }
-        bi.addView(descTv)
+        bi.addView(descTv, LinearLayout.LayoutParams(-2, -2))
         val timeLabel =
             makeTv("", 12f, C_WHITE85).apply {
                 visibility = View.GONE
@@ -1455,11 +1502,12 @@ private class NativeAdapter(
                         }
                         // 高光点自动检测：播放进度到达高光点 ±3s 内自动触发
                         for (hl in epHighlights) {
-                            val hlMs = (hl.time * 1000).toLong()
+                            val hlMs = hl.startTimeMs.toLong()
                             if (kotlin.math.abs(p - hlMs) < 3000 && triggeredSet.add(hl.id)) {
+                                /* DISABLED: auto trigger
                                 if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_bubble") || com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("on_tap_danmaku")) {
                                     com.qingmo.app.xiaomo.XiaoMoCore.triggerDanmakuHint(hl)
-                                }
+                                } */
                                 // AI 替身自动发弹幕
                                 if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("auto_danmaku")) {
                                     val autoText = hl.emotionHints?.randomOrNull() ?: hl.title
@@ -1470,6 +1518,21 @@ private class NativeAdapter(
                         }
                     }
                     h.danmakuView.updatePlaybackTime(p)
+                    h.seekBar.updatePlaybackTime(p)
+                    // GIF 硬切换：code-based + effect lock 防闪烁
+                    val activeHL = epHighlights.find { p in it.startTimeMs.toLong()..it.endTimeMs.toLong() }
+                    if (activeHL?.id != lastActiveHlId) {
+                        lastActiveHlId = activeHL?.id
+                        if (activeHL != null && activeHL.xiaomoGifCode.isNotEmpty()) {
+                            XiaoMoCore.triggerEffect(activeHL.xiaomoGifCode)
+                            // 高光气泡
+                            if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_bubble")) {
+                                XiaoMoCore.triggerDanmakuHint(activeHL)
+                            }
+                        } else {
+                            XiaoMoCore.setIdle()
+                        }
+                    }
                     delay(200)
                 }
             }
@@ -1703,16 +1766,19 @@ private class NativeAdapter(
         var onSeek: ((Long) -> Unit)? = null
         var onDragChange: ((Boolean) -> Unit)? = null
         private var seekPlayer: ExoPlayer? = null
-        private var highlights: List<com.qingmo.app.data.model.HighlightItem> = emptyList()
+        private var highlights: List<com.qingmo.app.data.model.DramaHighlight> = emptyList()
         private var longPressJob: kotlinx.coroutines.Job? = null
+        private var currentTimeMs: Long = 0L
 
-        fun setPlayer(p: ExoPlayer?) {
-            seekPlayer = p
+        fun setPlayer(p: ExoPlayer?) { seekPlayer = p }
+
+        fun setHighlights(list: List<com.qingmo.app.data.model.DramaHighlight>) {
+            highlights = list; postInvalidate()
         }
 
-        fun setHighlights(list: List<com.qingmo.app.data.model.HighlightItem>) {
-            highlights = list
-            postInvalidate()
+        fun updatePlaybackTime(timeMs: Long) {
+            currentTimeMs = timeMs
+            if (!isDragging) postInvalidate()
         }
 
         fun setProgress(
@@ -1755,10 +1821,33 @@ private class NativeAdapter(
                     Paint(Paint.ANTI_ALIAS_FLAG).apply { color = pr },
                 )
             }
-            highlights.forEach { h ->
-                val hProgress = if (totalDuration > 0) (h.time * 1000f / totalDuration).coerceIn(0f,1f) else 0f
+            // 高光点 marker：3 状态渲染
+            for (h in highlights) {
+                if (h.startTimeMs <= 0 || totalDuration <= 0 || h.startTimeMs > totalDuration) continue
+                val hProgress = h.startTimeMs.toFloat() / totalDuration
                 val dotX = safePadding + w * hProgress
-                canvas.drawCircle(dotX, cy, dp(3.5f).toFloat(), highlightDotPaint)
+                val state = when {
+                    currentTimeMs < h.startTimeMs -> "upcoming"
+                    currentTimeMs <= h.endTimeMs -> "active"
+                    else -> "passed"
+                }
+                val dotPaint = highlightDotPaint
+                when (state) {
+                    "upcoming" -> {
+                        dotPaint.color = 0x88FFFFFF.toInt(); dotPaint.alpha = 160
+                        canvas.drawCircle(dotX, cy, dp(2.8f).toFloat(), dotPaint)
+                    }
+                    "active" -> {
+                        dotPaint.color = 0xFFFFFFFF.toInt(); dotPaint.alpha = 255
+                        canvas.drawCircle(dotX, cy, dp(4.5f).toFloat(), dotPaint)
+                        val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x40FFFFFF.toInt(); alpha = 100 }
+                        canvas.drawCircle(dotX, cy, dp(7f).toFloat(), glow)
+                    }
+                    "passed" -> {
+                        dotPaint.color = 0xFF888888.toInt(); dotPaint.alpha = 100
+                        canvas.drawCircle(dotX, cy, dp(2.2f).toFloat(), dotPaint)
+                    }
+                }
             }
             canvas.drawCircle(px, cy, if (isDragging) dp(6f).toFloat() else thumbRadius, thumbPaint)
         }
@@ -1775,8 +1864,8 @@ private class NativeAdapter(
                     peekLabel.visibility = View.GONE
                     val downProgress = (touchXInTrack / effectiveW).coerceIn(0f, 1f)
                     val curSec = if (totalDuration > 0) (downProgress * totalDuration / 1000f) else 0f
-                    val nearHighlight = highlights.minByOrNull { abs(it.time - curSec) }
-                    if (nearHighlight != null && abs(nearHighlight.time - curSec) < 8f) {
+                    val nearHighlight = highlights.minByOrNull { abs(it.startTimeMs / 1000f - curSec) }
+                    if (nearHighlight != null && abs(nearHighlight.startTimeMs / 1000f - curSec) < 8f) {
                         longPressJob?.cancel()
                         longPressJob = scope.launch {
                             kotlinx.coroutines.delay(300L)
@@ -1793,8 +1882,8 @@ private class NativeAdapter(
                     // 拖拽移动过程中实时检测附近8秒范围内的高光点，手指滑到高光点立刻显示提示
                     val moveProgress = (touchXInTrack / effectiveW).coerceIn(0f, 1f)
                     val curSec = if (totalDuration > 0) (moveProgress * totalDuration / 1000f) else 0f
-                    val nearHighlight = highlights.minByOrNull { abs(it.time - curSec) }
-                    if (nearHighlight != null && abs(nearHighlight.time - curSec) < 8f) {
+                    val nearHighlight = highlights.minByOrNull { abs(it.startTimeMs / 1000f - curSec) }
+                    if (nearHighlight != null && abs(nearHighlight.startTimeMs / 1000f - curSec) < 8f) {
                         peekLabel.text = nearHighlight.title
                         peekLabel.visibility = View.VISIBLE
                     } else {
@@ -2516,7 +2605,7 @@ fun XiaoMoChatSheet(
                                             Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
                                                 Text("删除", fontSize = 11.sp, color = Color(0xFFE53935), modifier = Modifier.clickable {
                                                     scope.launch(Dispatchers.IO) {
-                                                        try { RetrofitClient.api.deleteNote(nid); noteList = noteList.filter { it != n } } catch (_: Exception) {}
+                                                        try { RetrofitClient.api.deleteNote(nid, userId); noteList = noteList.filter { it != n } } catch (_: Exception) {}
                                                     }
                                                 })
                                             }
