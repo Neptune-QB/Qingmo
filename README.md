@@ -13,7 +13,7 @@
 | 客户端 | Kotlin · Jetpack Compose · ExoPlayer (Media3) · ViewPager2 · Retrofit · Coil |
 | 服务端 | Python 3.11 · FastAPI · Uvicorn · SQLite |
 | AI 模型 | Doubao-Seed-2.0-lite (火山引擎 Ark · OpenAI 兼容接口) |
-| 数据层 | SQLite (`ju_flash.db`) · 15 张生产表 · 全量真实数据 |
+| 数据层 | SQLite (`ju_flash.db`) · 21 张生产表 · 全量真实数据 |
 | 工具链 | ktlint · Gradle 8.7 |
 
 ---
@@ -133,22 +133,28 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | 表 | 说明 |
 |---|---|
 | `dramas` | 10 部短剧，/ 分隔标签 |
-| `episodes` | 232 集，100% 真实 MP4 |
+| `episodes` | 233 集，含 AIGC 分支 |
 | `danmaku` | 17.6 万条弹幕 |
 | `drama_highlight` | 高光点 (support/reaction/choice) |
-| `highlight_choices` | 二选一配置独立表 |
-| `episode_comments` | 评论 (平级嵌套) |
+| `episode_comments` | 评论 (楼中楼平级) |
 | `episode_likes` | 点赞 |
 | `user_favorites` | 收藏 |
 | `user_progress` | 播放进度实时上报 |
+| `user_notes` | 追剧笔记 |
+| `user_interaction` | 互动上报 |
 | `drama_summaries` | 每集 AI 剧情摘要 (RAG) |
 | `drama_characters` | 角色人设 (RAG) |
 | `drama_timeline` | 事件时间线 (RAG) |
+| `episode_transcript` | 台词 (ASR) |
+| `episode_scene_segment` | 剧情片段切分 |
+| `episode_content_summary` | 集内容摘要 |
+| `video_analysis_task` | AI 分析任务 |
 | `user_chat_sessions` | 小墨对话会话 |
 | `user_chat_messages` | 对话消息持久化 |
+| `xiaomo_gif` | 11 种高光 GIF 动效 |
 | `users` | 用户认证 |
 
-共 15 张生产表，零 mock 数据。
+共 21 张表。
 
 ---
 
