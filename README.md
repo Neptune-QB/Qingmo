@@ -73,7 +73,27 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 # http://127.0.0.1:8000/docs 自动生成 API 文档
 ```
 
-### 2. 编译 Android
+### 2. 准备视频数据
+
+视频文件存放于 `backend/crawler/data/videos/`，按剧集 ID 分目录：
+
+```
+backend/crawler/data/videos/
+├── 1/   # 北派寻宝笔记
+├── 2/   # 天下第一纨绔 (含 AIGC 分支)
+├── 3/   # 十八岁太奶奶
+├── 4/   # 幸得相遇别离时
+├── 5/   # 荒年全村啃树皮 (暂无资源)
+├── ...
+└── 10/  # 北往 (暂无资源)
+```
+
+> 前 4 部剧集视频资源通过百度网盘分发，下载后解压到 `backend/crawler/data/videos/` 目录即可。
+> 后 6 部暂无视频资源，播放页会显示「视频资源缺失」。
+> 
+> 链接: https://pan.baidu.com/s/1nARYVyDOefBJBqVXOc2aOw?pwd=h3qx 提取码: h3qx
+
+### 3. 编译 Android
 
 ```bash
 cd android
