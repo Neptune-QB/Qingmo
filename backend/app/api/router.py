@@ -238,7 +238,7 @@ def get_drama_detail(drama_id: int):
     tags = _split_tags(row["tags"])
 
     cursor.execute(
-        "SELECT episode_id, episode_num, title, duration, thumbnail_url FROM episodes WHERE drama_id = ? ORDER BY episode_num",
+        "SELECT episode_id, episode_num, title, duration, thumbnail_url FROM episodes WHERE drama_id = ? AND episode_num > 0 ORDER BY episode_num",
         (drama_id,),
     )
     episodes = [

@@ -16,6 +16,7 @@ import android.widget.Space
 import android.widget.TextView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
@@ -218,6 +220,11 @@ private fun Pager(
     var danmakuSentText by remember { mutableStateOf<String?>(null) }
     var showNoteInput by remember { mutableStateOf(false) }
     var showBranchVote by remember { mutableStateOf(false) }
+    var showChoicePanel by remember { mutableStateOf(false) }
+    var activeChoiceHl by remember { mutableStateOf<com.qingmo.app.data.model.DramaHighlight?>(null) }
+    var showAigcEndPanel by remember { mutableStateOf(false) }
+    var aigcVideoUrl by remember { mutableStateOf("") }
+    var aigcSavedPos by remember { mutableLongStateOf(0L) }
     var vp2 by remember { mutableStateOf<ViewPager2?>(null) }
     val curEp = remember(curPage, sorted) { sorted.getOrNull(curPage) }
     val dramas = remember(allDramas) { allDramas.sortedBy { it.id } }
@@ -283,6 +290,12 @@ private fun Pager(
                     showCommentInput = true
                 }
                 it.onDanmakuClick = { showDanmakuInput = true }
+                it.onChoicePanelShow = { hl ->
+                    activeChoiceHl = hl
+                    showChoicePanel = true
+                    it.activePlayer?.pause()
+                }
+                it.onAigcEnd = { showAigcEndPanel = true }
                 it.userId = userId
             }
         }
@@ -636,6 +649,123 @@ private fun Pager(
             DISABLED */
         }
 
+        // 二选一面板 — choice_panel 高光点
+        if (showChoicePanel && activeChoiceHl != null) {
+            val hl = activeChoiceHl!!
+            val cfg = hl.interactionConfig
+            val options = (cfg["options"] as? List<*>)?.mapNotNull { it as? Map<*, *> } ?: emptyList()
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 300.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF1A1A2E))
+                        .border(1.dp, GraphiteTeal.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = cfg["title"] as? String ?: hl.title,
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    options.forEach { opt ->
+                        val label = opt["label"]?.toString() ?: ""
+                        val video = opt["video"]?.toString() ?: ""
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(GraphiteTeal)
+                                .clickable {
+                                    showChoicePanel = false
+                                    activeChoiceHl = null
+                                    // 小墨弹幕
+                                    val crowd = java.text.DecimalFormat("#.#").format(kotlin.random.Random.nextDouble(3.2, 68.9))
+                                    val danmakuText = when {
+                                        label.contains("教训") -> "${crowd}万人选择教训他！看看我的实力💪"
+                                        label.contains("放过") -> "${crowd}万人选择放他一马~蒜鸟蒜鸟🕊️"
+                                        else -> "你选择了「$label」"
+                                    }
+                                    if (video.isNotEmpty()) {
+                                        val fullUrl = RetrofitClient.resolveMediaUrl(video)
+                                        aigcVideoUrl = fullUrl
+                                        aigcSavedPos = adapter.activePlayer?.currentPosition ?: 0L
+                                        adapter.playBranchVideo(fullUrl)
+                                        adapter.sendXiaomoDanmaku(2025001L, danmakuText, delayMs = 800)
+                                    } else {
+                                        adapter.activePlayer?.playWhenReady = true
+                                        adapter.activePlayer?.seekTo(hl.endTimeMs.toLong() + 100)
+                                        adapter.sendXiaomoDanmaku(curEp?.episodeId ?: 0L, danmakuText, delayMs = 300)
+                                    }
+                                }
+                                .padding(vertical = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "选择后将自动播放对应剧情",
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+
+        // AIGC 分支视频播完面板
+        if (showAigcEndPanel) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF1A1A2E))
+                        .border(1.dp, GraphiteTeal.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("分支剧情已播完", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
+                    Spacer(Modifier.height(20.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(1.dp, GraphiteTeal, RoundedCornerShape(12.dp))
+                                .clickable {
+                                    showAigcEndPanel = false
+                                    val player = adapter.activePlayer
+                                    player?.seekTo(0)
+                                    player?.playWhenReady = true
+                                }
+                                .padding(horizontal = 28.dp, vertical = 12.dp),
+                        ) { Text("重播", color = GraphiteTeal, fontSize = 15.sp, fontWeight = FontWeight.Medium) }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(GraphiteTeal)
+                                .clickable {
+                                    showAigcEndPanel = false
+                                    adapter.restoreFromBranch(aigcSavedPos, detail.id, curEp?.episodeNum ?: 1)
+                                }
+                                .padding(horizontal = 28.dp, vertical = 12.dp),
+                        ) { Text("返回", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium) }
+                    }
+                }
+            }
+        }
+
         // 小墨聊天底部抽屉 — 和评论界面完全一致风格
         XiaoMoChatSheet(
             visible = xiaoMoExpanded,
@@ -884,6 +1014,8 @@ private class NativeAdapter(
     var onCommentClick: ((Long) -> Unit)? = null,
     var onFavoriteClick: ((Long) -> Unit)? = null,
     var onDanmakuClick: (() -> Unit)? = null,
+    var onChoicePanelShow: ((com.qingmo.app.data.model.DramaHighlight) -> Unit)? = null,
+    var onAigcEnd: (() -> Unit)? = null,
     var userId: String = "",
 ) : RecyclerView.Adapter<NativeAdapter.VH>() {
     val players = mutableMapOf<Int, ExoPlayer>()
@@ -897,10 +1029,70 @@ private class NativeAdapter(
     private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.DramaHighlight>>()
     private val triggeredSet = mutableSetOf<Int>()
     private val interactionDanmakuSent = mutableSetOf<Int>()
+    internal val choiceCompleted = mutableSetOf<Int>()
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
     private val favoritedDramaIds = mutableSetOf<Int>()
     private var globalCurrentDramaFavCount = 0
+
+    internal var isPlayingBranchVideo = false
+    internal var suppressChoicePanel = false
+    internal var branchEpisodeId = 0L
+
+    fun playBranchVideo(url: String, aigcEpisodeId: Long = 2025001L) {
+        val player = activePlayer ?: return
+        isPlayingBranchVideo = true
+        branchEpisodeId = aigcEpisodeId
+        activeVh?.danmakuView?.clearDanmaku()
+        // 加载 AIGC 剧集的弹幕
+        scope.launch(Dispatchers.IO) {
+            try {
+                val items = RetrofitClient.api.getDanmaku(aigcEpisodeId).map { r ->
+                    val colorStr = (r["color"] as? String) ?: "#ffffff"
+                    val color = try { AndroidColor.parseColor(colorStr) } catch (_: Exception) { AndroidColor.WHITE }
+                    DanmakuItem(
+                        id = ((r["id"] as? Number)?.toLong() ?: 0L),
+                        text = (r["text"] as? String) ?: "",
+                        timeSec = ((r["time_sec"] as? Number)?.toFloat() ?: 0f),
+                        color = color,
+                        userId = (r["user_id"] as? String) ?: "",
+                    )
+                }
+                danmakuCache[aigcEpisodeId] = items
+                activeVh?.danmakuView?.post { activeVh?.danmakuView?.setDanmakuData(items) }
+            } catch (_: Exception) {}
+        }
+        player.stop()
+        player.setMediaItem(MediaItem.fromUri(url))
+        player.playWhenReady = true
+        player.prepare()
+        player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    player.removeListener(this)
+                    player.seekTo(player.duration)
+                    player.playWhenReady = false
+                    onAigcEnd?.invoke()
+                }
+            }
+        })
+    }
+
+    fun restoreFromBranch(savedPos: Long, dramaId: Int, epNum: Int) {
+        isPlayingBranchVideo = false
+        suppressChoicePanel = true
+        val player = activePlayer ?: return
+        player.stop()
+        player.setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl("videos/$dramaId/$epNum.mp4")))
+        player.seekTo(savedPos)
+        player.playWhenReady = true
+        player.prepare()
+        // 恢复原集弹幕
+        val origEpId = (dramaId * 1000 + epNum).toLong()
+        danmakuCache[origEpId]?.let { items ->
+            activeVh?.danmakuView?.post { activeVh?.danmakuView?.setDanmakuData(items) }
+        }
+    }
 
     fun setDanmakuEnabled(enabled: Boolean) {
         danmakuGlobalEnabled = enabled
@@ -1083,7 +1275,7 @@ private class NativeAdapter(
         val favoriteLabel = makeTv("", 11f, C_WHITE85).apply { gravity = Gravity.CENTER; text = formatCount(0) }
         val favoriteContainer = FrameLayout(c).apply {
             setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
-            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            val lp = FrameLayout.LayoutParams(dp(48f), dp(48f), Gravity.CENTER)
             favoriteIv.layoutParams = lp
             addView(favoriteIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
         }
@@ -1096,7 +1288,7 @@ private class NativeAdapter(
         }
         val commentContainer = FrameLayout(c).apply {
             setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
-            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            val lp = FrameLayout.LayoutParams(dp(48f), dp(48f), Gravity.CENTER)
             commentIv.layoutParams = lp
             addView(commentIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
         }
@@ -1111,7 +1303,7 @@ private class NativeAdapter(
         }
         val shareContainer = FrameLayout(c).apply {
             setPadding(dp(0f), dp(0f), dp(0f), dp(0f))
-            val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+            val lp = FrameLayout.LayoutParams(dp(48f), dp(48f), Gravity.CENTER)
             shareIv.layoutParams = lp
             addView(shareIv, FrameLayout.LayoutParams(dp(32f), dp(32f), Gravity.CENTER))
             setOnClickListener {
@@ -1452,10 +1644,11 @@ private class NativeAdapter(
                         addListener(
                             object : Player.Listener {
                                 override fun onPlaybackStateChanged(state: Int) {
-                                    if (state ==
-                                        Player.STATE_ENDED &&
-                                        pos == cur
-                                    ) {
+                                    if (state == Player.STATE_ENDED && pos == cur) {
+                                        if (isPlayingBranchVideo) {
+                                            onAigcEnd?.invoke()
+                                            return
+                                        }
                                         ProgressCache.markWatched(eps[pos].episodeId)
                                         ProgressCache.save(eps[pos].episodeId, 0L)
                                         // 集结束陪看播报
@@ -1556,14 +1749,20 @@ private class NativeAdapter(
                     val curVis = h.emotionBtn.visibility
                     Log.d("DramaPager", "BTN: isActive=$isActive pos=$pos cur=$cur hl=${activeHL?.id} hlType=${activeHL?.highlightType} shouldShow=$shouldShow p=$p hlsSz=${hls.size}")
                     if (shouldShow && curVis != View.VISIBLE) {
-                        val preset = getHighlightInteractionPreset(activeHL)
-                        if (activeHL.highlightType.isNotEmpty()) {
-                            h.emotionBtn.setInteractionKey(preset.interactionKey)
+                        val iType = activeHL.interactionType
+                        if (iType == "choice_panel" && !suppressChoicePanel) {
+                            onChoicePanelShow?.invoke(activeHL)
+                        } else {
+                            val preset = getHighlightInteractionPreset(activeHL)
+                            if (activeHL.highlightType.isNotEmpty()) {
+                                h.emotionBtn.setInteractionKey(preset.interactionKey)
+                            }
+                            h.emotionBtn.visibility = View.VISIBLE
                         }
-                        h.emotionBtn.visibility = View.VISIBLE
                     } else if (!shouldShow && curVis != View.GONE) {
                         h.emotionBtn.visibility = View.GONE
                         XiaoMoCore.setIdle()
+                        suppressChoicePanel = false
                     }
                     lastP = p
                     delay(200)
@@ -1648,6 +1847,12 @@ private class NativeAdapter(
         val list = danmakuCache[episodeId]?.toMutableList() ?: mutableListOf()
         list.add(item)
         danmakuCache[episodeId] = list
+        // 分支视频播放时，直接渲染到当前 VH
+        if (isPlayingBranchVideo) {
+            if (forceEmit) activeVh?.danmakuView?.forceEmitDanmaku(item)
+            else activeVh?.danmakuView?.addPendingDanmaku(item)
+            return
+        }
         // 添加到所有展示该剧集 ViewHolder 的排期队列
         for (i in 0 until viewHolders.size()) {
             val h = viewHolders.valueAt(i)
@@ -1662,7 +1867,7 @@ private class NativeAdapter(
     // ===== 小墨互动增强 =====
     private val xiaomoGraphite = 0xFF3D5A3E.toInt()
 
-    private fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0, interactionType: String = "") {
+    internal fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0, interactionType: String = "") {
         val nowMs = activePlayer?.currentPosition ?: 0L
         val item = DanmakuItem(
             id = System.currentTimeMillis(),
@@ -2020,7 +2225,7 @@ private class NativeAdapter(
 
     private fun actionItemWithLabelCustom(iconView: android.view.View, labelTv: TextView): LinearLayout {
         val item = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(0, dp(0f), 0, dp(0f)) }
-        val lp = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
+        val lp = FrameLayout.LayoutParams(dp(48f), dp(48f), Gravity.CENTER)
         iconView.layoutParams = lp
         item.addView(iconView)
         item.addView(labelTv)
