@@ -199,3 +199,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | [API](docs/API.md) | 完整接口参考 |
 | [数据库](docs/DATABASE.md) | 表结构 + 迁移策略 |
 | [排期](docs/青墨短剧_小墨Agent_20260521-0610开发排期_V1.0.md) | 21 天开发计划 |
+| [部署](docs/部署文档_V1.0.md) | 部署与网络配置 |
+| [功能总览](docs/系统全功能总览_V1.0.md) | 全系统功能清单 |
+| [视频分析](docs/video_analysis.md) | 多模态视频分析流水线 |
+| [全链路测试 (0609)](docs/全链路测试报告_20260609.md) | 最新全链路测试报告 |
