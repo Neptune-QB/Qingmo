@@ -282,13 +282,6 @@ private fun Pager(
                 }
                 it.onDanmakuClick = { showDanmakuInput = true }
                 it.userId = userId
-                it.onActiveHighlightChanged = { hl ->
-                    if (hl != null && hl.xiaomoGifCode.isNotEmpty()) {
-                        XiaoMoCore.triggerEffect(hl.xiaomoGifCode)
-                    } else {
-                        XiaoMoCore.setIdle()
-                    }
-                }
             }
         }
     LaunchedEffect(Unit) {
@@ -430,16 +423,6 @@ private fun Pager(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                // 高光气泡 — 小墨头顶偏左或偏右
-                if (xiaoMoState.bubbleText.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .offset(x = if (xiaoMoOnLeft) 40.dp else (-40).dp, y = (-12).dp)
-                    ) {
-                        XiaoMoBubble(xiaoMoState.bubbleText)
-                    }
-                }
                 XiaoMoPeekView(
                     visible = true,
                     emotion = xiaoMoState.emotion,
@@ -861,13 +844,12 @@ private fun formatCount(n: Int): String = when {
 }
 
 @Composable
-private fun XiaoMoBubble(text: String) {
+private fun XiaoMoBubble(text: String, modifier: Modifier = Modifier) {
     if (text.isEmpty()) return
-    val bubbleAlpha by androidx.compose.animation.core.animateFloatAsState(1f, tween(300))
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = Color.White.copy(alpha = 0.92f * bubbleAlpha),
-        modifier = Modifier.padding(horizontal = 6.dp).alpha(bubbleAlpha),
+        color = Color.White.copy(alpha = 0.92f),
+        modifier = modifier,
         shadowElevation = 4.dp,
     ) {
         Text(
@@ -1492,6 +1474,7 @@ private class NativeAdapter(
         progressJobs[pos] =
             scope.launch {
                 var last = 0L
+                var lastP = 0L
                 val epHighlights = highlightCache[ep.episodeId.toInt()] ?: emptyList()
                 while (true) {
                     val p = player.currentPosition
@@ -1519,20 +1502,24 @@ private class NativeAdapter(
                     }
                     h.danmakuView.updatePlaybackTime(p)
                     h.seekBar.updatePlaybackTime(p)
-                    // GIF 硬切换：code-based + effect lock 防闪烁
+                    // GIF 硬切换 + 互动面板：只响应正向进入的高光点
                     val activeHL = epHighlights.find { p in it.startTimeMs.toLong()..it.endTimeMs.toLong() }
                     if (activeHL?.id != lastActiveHlId) {
+                        val forwardEnter = activeHL != null && lastP < activeHL.startTimeMs
                         lastActiveHlId = activeHL?.id
-                        if (activeHL != null && activeHL.xiaomoGifCode.isNotEmpty()) {
+                        if (forwardEnter && activeHL.xiaomoGifCode.isNotEmpty()) {
                             XiaoMoCore.triggerEffect(activeHL.xiaomoGifCode)
-                            // 高光气泡
                             if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_bubble")) {
-                                XiaoMoCore.triggerDanmakuHint(activeHL)
+                                val text = activeHL.bubbleText.ifEmpty { activeHL.title }
+                                if (text.isNotEmpty()) {
+                                    sendXiaomoDanmaku(ep.episodeId, text)
+                                }
                             }
-                        } else {
-                            XiaoMoCore.setIdle()
+                        } else if (activeHL == null) {
+                            XiaoMoCore.dismissHint()
                         }
                     }
+                    lastP = p
                     delay(200)
                 }
             }
@@ -1624,15 +1611,15 @@ private class NativeAdapter(
     }
 
     // ===== 小墨互动增强 =====
-    private val xiaomoPurple = 0xFFC864FF.toInt()
+    private val xiaomoGraphite = 0xFF3D5A3E.toInt()
 
     private fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0) {
         val nowMs = activePlayer?.currentPosition ?: 0L
         val item = DanmakuItem(
             id = System.currentTimeMillis(),
-            text = text,
+            text = "小墨: $text",
             timeSec = nowMs / 1000f,
-            color = xiaomoPurple,
+            color = xiaomoGraphite,
             userId = "xiaomo_agent",
         )
         if (delayMs > 0) {

@@ -1,7 +1,7 @@
 package com.qingmo.app.xiaomo
 
 import androidx.compose.runtime.Composable
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 
 /**
  * 互动结果，由各模块定义具体数据
@@ -35,14 +35,14 @@ interface InteractionModule {
      * 判断是否能处理该高光点
      * @return true 表示匹配该高光点的 widget_type
      */
-    fun canHandle(highlight: HighlightItem): Boolean
+    fun canHandle(highlight: DramaHighlight): Boolean
 
     /**
      * 渲染互动 UI
      */
     @Composable
     fun RenderInteraction(
-        highlight: HighlightItem,
+        highlight: DramaHighlight,
         onInteract: (InteractionResult) -> Unit,
         onDismiss: () -> Unit,
     )

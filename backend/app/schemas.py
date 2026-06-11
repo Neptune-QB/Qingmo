@@ -25,30 +25,52 @@ class DramaDetail(BaseModel):
     cover_url: str = ""
     tags: List[str] = []
     episodes: List[EpisodeBrief] = []
+    fav_count: int = 0
 
 
-class HighlightItem(BaseModel):
-    id: int
+class DramaHighlight(BaseModel):
+    id: Optional[int] = None
+    drama_id: int
     episode_id: int
-    time: float
-    type: str
+    highlight_type: str
+    start_time_ms: int
+    end_time_ms: int
+    hint_offset_ms: int = 2000
     title: str
-    widget_type: str = "emoji"
-    options: Optional[List[str]] = None
-    emotion_hints: Optional[List[str]] = None
-    duration: int = 15
+    description: Optional[str] = None
+    interaction_type: str
+    interaction_config: dict
+    xiaomo_gif_code: str
+    priority: int = 0
+    status: str = "enabled"
+    source_type: str = "manual"
+    confidence: Optional[float] = None
+    evidence_json: Optional[str] = None
+    review_status: Optional[str] = "approved"
+    bubble_text: str = ""
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class PlaybackInfo(BaseModel):
     episode_id: int
     video_url: str
     duration: int = 0
-    highlights: List[HighlightItem] = []
+    highlights: List[DramaHighlight] = []
+
+
+class EpisodePlayInfo(BaseModel):
+    episode_id: int
+    drama_id: int
+    title: str
+    duration_ms: int
+    highlights: List[DramaHighlight] = []
 
 
 class ProgressReport(BaseModel):
     episode_id: int
     progress: int
+    user_id: str = "0"
 
 
 class HealthResponse(BaseModel):
@@ -57,38 +79,16 @@ class HealthResponse(BaseModel):
     llm_available: bool = False
 
 
-# ===== 互动模块 Schema =====
-class InteractionRecord(BaseModel):
-    id: int
-    user_id: str
-    episode_id: int
-    highlight_id: Optional[int] = None
-    module_id: str
-    interaction_data: Optional[dict] = None
-    created_at: Optional[str] = None
-
-
-class InteractionStats(BaseModel):
-    total_count: int
-    by_module: dict[str, int] = {}
-    by_emotion: dict[str, int] = {}
-
-
-class InteractionDetail(BaseModel):
-    episode_id: int
-    user_id: str
-    total: int
-    stats: InteractionStats
-
-
 # ===== 用户画像 Schema =====
 class WatchHistoryItem(BaseModel):
     episode_id: int
     drama_id: int
     drama_title: str = ""
+    cover_url: str = ""
     episode_num: int = 0
     progress: int = 0
     watched: int = 0
+    total_episodes: int = 0
 
 
 class UserProfileResponse(BaseModel):
@@ -164,3 +164,50 @@ class AppendMessageRequest(BaseModel):
     session_id: int
     role: str
     content: str
+
+
+# ===== 用户互动上报 Schema =====
+class InteractionReport(BaseModel):
+    user_id: Optional[str] = None
+    device_id: Optional[str] = None
+    drama_id: int
+    episode_id: int
+    highlight_id: int
+    interaction_type: str
+    option_key: Optional[str] = None
+    option_label: Optional[str] = None
+
+
+class InteractionStatsItem(BaseModel):
+    option_key: Optional[str] = None
+    option_label: Optional[str] = None
+    count: int
+    percent: float
+
+
+class InteractionStats(BaseModel):
+    highlight_id: int
+    total_count: int
+    options: List[InteractionStatsItem] = []
+
+
+# ===== 小墨 GIF 动效 Schema =====
+class XiaoMoGif(BaseModel):
+    id: int
+    code: str
+    name: str
+    gif_url: str
+    highlight_type: Optional[str] = None
+    description: str = ""
+    status: str = "published"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class XiaoMoGifCreate(BaseModel):
+    code: str
+    name: str
+    gif_url: str
+    highlight_type: Optional[str] = None
+    description: str = ""
+    status: str = "published"

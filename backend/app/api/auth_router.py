@@ -107,22 +107,12 @@ def get_me(user: dict = Depends(get_current_user)):
     cursor = conn.cursor()
     uid = str(user["id"])
 
-    # 互动统计
-    cursor.execute(
-        "SELECT module_id, COUNT(*) as cnt FROM user_interactions WHERE user_id = ? GROUP BY module_id",
-        (uid,),
-    )
-    interaction_stats = {r["module_id"]: r["cnt"] for r in cursor.fetchall()}
-
     # 观看统计
     cursor.execute(
-        "SELECT COUNT(*) as cnt FROM user_progress WHERE watched = 1"
+        "SELECT COUNT(*) as cnt FROM user_progress WHERE user_id = ? AND watched = 1",
+        (uid,),
     )
     watched = cursor.fetchone()["cnt"] or 0
-
-    # 互动总次数
-    cursor.execute("SELECT COUNT(*) as cnt FROM user_interactions WHERE user_id = ?", (uid,))
-    interaction_total = cursor.fetchone()["cnt"] or 0
 
     conn.close()
 

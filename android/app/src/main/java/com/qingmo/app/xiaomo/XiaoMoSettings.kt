@@ -18,7 +18,6 @@ object XiaoMoSettings {
         "on_tap_danmaku" to "一键弹幕面板",
         "danmaku_easteregg" to "弹幕彩蛋",
         "highlight_vote" to "剧情投票",
-        "highlight_quiz" to "AI剧情问答",
         "at_xiaomo_reply" to "@小墨评论区回复",
     )
 

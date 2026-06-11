@@ -11,9 +11,11 @@ data class WatchHistoryItem(
     @SerializedName("episode_id") val episodeId: Int,
     @SerializedName("drama_id") val dramaId: Int,
     @SerializedName("drama_title") val dramaTitle: String = "",
+    @SerializedName("cover_url") val coverUrl: String = "",
     @SerializedName("episode_num") val episodeNum: Int = 0,
     val progress: Int = 0,
     val watched: Int = 0,
+    @SerializedName("total_episodes") val totalEpisodes: Int = 0,
 )
 
 /**
@@ -23,7 +25,6 @@ data class WatchHistoryItem(
 data class UserProfile(
     @SerializedName("user_id") val userId: String,
     @SerializedName("watch_history") val watchHistory: List<WatchHistoryItem> = emptyList(),
-    @SerializedName("interaction_stats") val interactionStats: Map<String, Int> = emptyMap(),
     @SerializedName("favorite_dramas") val favoriteDramas: List<Int> = emptyList(),
     val preferences: Map<String, Float> = emptyMap(),
 )

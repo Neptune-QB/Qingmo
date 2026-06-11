@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 import com.qingmo.app.ui.theme.Border
 import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.OnSurfaceMuted
@@ -53,12 +53,12 @@ class VoteModule : InteractionModule {
     override val moduleName = "剧情投票"
     override val priority = 20
 
-    override fun canHandle(highlight: HighlightItem): Boolean =
-        highlight.widgetType == "vote"
+    override fun canHandle(highlight: DramaHighlight): Boolean =
+        highlight.interactionType == "vote"
 
     @Composable
     override fun RenderInteraction(
-        highlight: HighlightItem,
+        highlight: DramaHighlight,
         onInteract: (InteractionResult) -> Unit,
         onDismiss: () -> Unit,
     ) {
@@ -118,7 +118,7 @@ class VoteModule : InteractionModule {
                                         data = mapOf(
                                             "vote" to option,
                                             "option_index" to index,
-                                            "highlight_type" to highlight.type,
+                                            "highlight_type" to highlight.highlightType,
                                         ),
                                     ),
                                 )
@@ -166,9 +166,13 @@ class VoteModule : InteractionModule {
     override fun processResult(result: InteractionResult) {
         val emotionStr = result.data["highlight_type"] as? String ?: return
         val mapped = when (emotionStr) {
-            "conflict" -> XiaoMoEmotion.Surprised
-            "twist" -> XiaoMoEmotion.Confused
-            "sweet" -> XiaoMoEmotion.Shy
+            "cliffhanger" -> XiaoMoEmotion.Surprised
+            "choice_point" -> XiaoMoEmotion.Confused
+            "emotional_burst" -> XiaoMoEmotion.Shy
+            "power_moment" -> XiaoMoEmotion.Excited
+            "reversal" -> XiaoMoEmotion.Surprised
+            "slapback" -> XiaoMoEmotion.Excited
+            "heartbreak" -> XiaoMoEmotion.Shy
             else -> XiaoMoEmotion.Excited
         }
         XiaoMoCore.setEmotion(mapped)

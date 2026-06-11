@@ -18,29 +18,11 @@ def restore_all_deleted_tables():
         password_hash TEXT NOT NULL,
         nickname TEXT,
         avatar TEXT,
-        device_ids TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
     print("✅ 重建 users 表")
-
-    # 2. user_profiles 用户画像表
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS user_profiles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT UNIQUE NOT NULL,
-        gender TEXT,
-        birthday TEXT,
-        bio TEXT,
-        favorite_tags TEXT,
-        last_watched_drama_id INTEGER,
-        total_watch_duration INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-    print("✅ 重建 user_profiles 表")
 
     # 3. highlight_votes 高光投票主表
     cur.execute("""
@@ -70,19 +52,6 @@ def restore_all_deleted_tables():
     );
     """)
     print("✅ 重建 highlight_vote_records 表")
-
-    # 5. user_quiz_scores 用户问答题得分表
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS user_quiz_scores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        highlight_id INTEGER NOT NULL,
-        device_id TEXT NOT NULL,
-        score INTEGER NOT NULL,
-        answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (highlight_id) REFERENCES highlights(id) ON DELETE CASCADE
-    );
-    """)
-    print("✅ 重建 user_quiz_scores 表")
 
     # 6. branch_votes 全剧分支投票主表
     cur.execute("""

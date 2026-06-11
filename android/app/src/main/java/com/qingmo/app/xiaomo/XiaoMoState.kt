@@ -1,6 +1,6 @@
 package com.qingmo.app.xiaomo
 
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 
 /**
  * 小墨角色状态枚举
@@ -22,14 +22,14 @@ enum class XiaoMoState {
 data class XiaoMoStateData(
     val state: XiaoMoState = XiaoMoState.Hidden,
     val currentModuleId: String? = null,
-    val currentHighlight: HighlightItem? = null,
+    val currentHighlight: DramaHighlight? = null,
     val lastInteractTime: Long = 0L,
     /** 当前姿态（控制展示哪张 PNG） */
     val pose: XiaoMoPose = XiaoMoPose.Idle,
     /** 当前情绪（控制 Emoji 气泡叠加） */
     val emotion: XiaoMoEmotion = XiaoMoEmotion.Neutral,
     /** 待一键发送弹幕的高光点，非空代表高光提示已触发 */
-    val pendingDanmakuHighlight: HighlightItem? = null,
+    val pendingDanmakuHighlight: DramaHighlight? = null,
     /** 高光点触发时的对话气泡文本 */
     val bubbleText: String = "",
 ) {

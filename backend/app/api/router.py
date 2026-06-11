@@ -9,11 +9,13 @@ from app.database import get_connection
 from app.config import settings
 from app.schemas import (
     DramaBrief, DramaDetail, EpisodeBrief,
-    PlaybackInfo, HighlightItem, HealthResponse,
-    InteractionRecord, InteractionStats, InteractionDetail,
+    PlaybackInfo, EpisodePlayInfo, DramaHighlight, HealthResponse,
     UserProfileResponse, UserProfileUpdate, WatchHistoryItem,
     AgentChatRequest, StoryExtensionRequest, GenerateHighlightsRequest,
     ChatSession, ChatMessageItem, CreateSessionRequest, AppendMessageRequest,
+    ProgressReport,
+    InteractionReport, InteractionStats,
+    XiaoMoGif, XiaoMoGifCreate,
 )
 from app.services.llm_service import llm_service, classify_intent, search_dramas, get_user_profile_summary, retrieve_plot_context
 from app.api.auth_router import get_current_user, get_optional_user
@@ -153,119 +155,6 @@ async def generate_highlights(req: GenerateHighlightsRequest):
     return {"highlights": highlights}
 
 
-@router.post("/interactions")
-def report_interaction(
-    user_id: str = Body(...),
-    episode_id: int = Body(...),
-    highlight_id: Optional[int] = Body(None),
-    module_id: str = Body(...),
-    interaction_data: Dict[str, Any] = Body(default_factory=dict)
-):
-    """上报用户互动数据"""
-    # 限制单次上报数据大小
-    if len(json.dumps(interaction_data, ensure_ascii=False)) > 4096:
-        raise HTTPException(status_code=413, detail="互动数据过大，请精简至 4KB 以内")
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """INSERT INTO user_interactions
-           (user_id, episode_id, highlight_id, module_id, interaction_data)
-           VALUES (?, ?, ?, ?, ?)""",
-        (user_id, episode_id, highlight_id, module_id, json.dumps(interaction_data))
-    )
-    conn.commit()
-    new_id = cursor.lastrowid
-    conn.close()
-    return {"ok": True, "interaction_id": new_id}
-
-
-@router.get("/interactions", response_model=list[InteractionRecord])
-def get_interactions(
-    user_id: Optional[str] = Query(default=None, description="按用户ID过滤"),
-    episode_id: Optional[int] = Query(default=None, description="按剧集ID过滤"),
-    highlight_id: Optional[int] = Query(default=None, description="按高光点ID过滤"),
-    module_id: Optional[str] = Query(default=None, description="按互动模块ID过滤"),
-    limit: int = Query(default=50, ge=1, le=500, description="返回条数上限"),
-    offset: int = Query(default=0, ge=0, description="分页偏移"),
-):
-    """查询互动记录，支持按用户/剧集/高光点/模块多维度过滤"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    where_clauses = []
-    params: list = []
-    if user_id:
-        where_clauses.append("user_id = ?")
-        params.append(user_id)
-    if episode_id is not None:
-        where_clauses.append("episode_id = ?")
-        params.append(episode_id)
-    if highlight_id is not None:
-        where_clauses.append("highlight_id = ?")
-        params.append(highlight_id)
-    if module_id:
-        where_clauses.append("module_id = ?")
-        params.append(module_id)
-
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-    params.extend([limit, offset])
-    cursor.execute(
-        f"SELECT * FROM user_interactions {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params,
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        InteractionRecord(
-            id=r["id"], user_id=r["user_id"], episode_id=r["episode_id"],
-            highlight_id=r["highlight_id"], module_id=r["module_id"],
-            interaction_data=json.loads(r["interaction_data"]) if r["interaction_data"] else None,
-            created_at=r["created_at"],
-        ) for r in rows
-    ]
-
-
-@router.get("/interactions/stats", response_model=InteractionDetail)
-def get_interaction_stats(
-    user_id: str = Query(..., description="用户ID"),
-    episode_id: int = Query(..., description="剧集ID"),
-):
-    """按用户+剧集维度聚合互动统计"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT module_id, interaction_data FROM user_interactions WHERE user_id = ? AND episode_id = ?",
-        (user_id, episode_id),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-
-    by_module: dict[str, int] = {}
-    by_emotion: dict[str, int] = {}
-    for r in rows:
-        module_id = r["module_id"]
-        by_module[module_id] = by_module.get(module_id, 0) + 1
-
-        data_str = r["interaction_data"]
-        if data_str:
-            try:
-                data = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-            emotion = data.get("emotion") or data.get("type")
-            if emotion:
-                by_emotion[emotion] = by_emotion.get(emotion, 0) + 1
-
-    total = len(rows)
-    return InteractionDetail(
-        episode_id=episode_id,
-        user_id=user_id,
-        total=total,
-        stats=InteractionStats(total_count=total, by_module=by_module, by_emotion=by_emotion),
-    )
-
-
 def _split_tags(tags_str: Optional[str]) -> List[str]:
     """拆分用 / 分隔的标签字符串，返回最多前3个标签"""
     if not tags_str:
@@ -359,8 +248,8 @@ def get_drama_detail(drama_id: int):
         ) for e in cursor.fetchall()
     ]
 
-    cursor.execute("SELECT COUNT(*) FROM user_favorites WHERE drama_id = ?", (drama_id,))
-    fav_count = cursor.fetchone()[0]
+    cursor.execute("SELECT fav_count FROM dramas WHERE id = ?", (drama_id,))
+    fav_count = cursor.fetchone()["fav_count"]
     conn.close()
     return DramaDetail(
         id=row["id"], title=row["title"],
@@ -379,26 +268,27 @@ def get_playback(episode_id: int):
         conn.close()
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    cursor.execute("SELECT * FROM highlights WHERE episode_id = ? ORDER BY time", (episode_id,))
+    cursor.execute("SELECT * FROM drama_highlight WHERE episode_id = ? AND status IN ('enabled', 'draft', 'ai_pending_review') ORDER BY start_time_ms", (episode_id,))
     highlights = []
     for h in cursor.fetchall():
-        opts = h["options"]
-        hints = h["emotion_hints"]
+        h = dict(h)
         try:
-            options = json.loads(opts) if opts else None
+            config = json.loads(h["interaction_config"]) if h["interaction_config"] else {}
         except (json.JSONDecodeError, TypeError):
-            options = opts.split(",") if opts else None
-        try:
-            emotion_hints = json.loads(hints) if hints else None
-        except (json.JSONDecodeError, TypeError):
-            emotion_hints = hints.split(",") if hints else None
+            config = {}
         highlights.append(
-            HighlightItem(
-                id=h["id"], episode_id=h["episode_id"], time=h["time"],
-                type=h["type"], title=h["title"], widget_type=h["widget_type"],
-                options=options,
-                emotion_hints=emotion_hints,
-                duration=h["duration"] if h["duration"] else 15,
+            DramaHighlight(
+                id=h["id"], drama_id=h["drama_id"], episode_id=h["episode_id"],
+                highlight_type=h["highlight_type"], start_time_ms=h["start_time_ms"],
+                end_time_ms=h["end_time_ms"], hint_offset_ms=h["hint_offset_ms"] or 2000,
+                title=h["title"], description=h["description"],
+                interaction_type=h["interaction_type"], interaction_config=config,
+                xiaomo_gif_code=h["xiaomo_gif_code"], priority=h["priority"] or 0,
+                status=h["status"], source_type=h.get("source_type", "manual"),
+                confidence=h.get("confidence"), evidence_json=h.get("evidence_json"),
+                review_status=h.get("review_status", "approved"),
+                bubble_text=h.get("bubble_text") or "",
+                created_at=h["created_at"], updated_at=h["updated_at"],
             )
         )
 
@@ -409,15 +299,58 @@ def get_playback(episode_id: int):
     )
 
 
-@router.post("/progress")
-def report_progress(episode_id: int = Body(...), progress: int = Body(...), user_id: str = Body(default="0")):
+@router.get("/episodes/{episode_id}/play", response_model=EpisodePlayInfo)
+def get_episode_play(episode_id: int):
+    """播放页数据：episode + highlights，duration 返回毫秒"""
     conn = get_connection()
     cursor = conn.cursor()
-    watched = 1 if progress > 0 else 0
+    cursor.execute("SELECT episode_id, drama_id, title, duration, video_url FROM episodes WHERE episode_id = ?", (episode_id,))
+    ep = cursor.fetchone()
+    if not ep:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    cursor.execute("SELECT * FROM drama_highlight WHERE episode_id = ? AND status IN ('enabled', 'draft', 'ai_pending_review') ORDER BY start_time_ms", (episode_id,))
+    highlights = []
+    for h in cursor.fetchall():
+        h = dict(h)
+        try:
+            config = json.loads(h["interaction_config"]) if h["interaction_config"] else {}
+        except (json.JSONDecodeError, TypeError):
+            config = {}
+        highlights.append(
+            DramaHighlight(
+                id=h["id"], drama_id=h["drama_id"], episode_id=h["episode_id"],
+                highlight_type=h["highlight_type"], start_time_ms=h["start_time_ms"],
+                end_time_ms=h["end_time_ms"], hint_offset_ms=h["hint_offset_ms"] or 2000,
+                title=h["title"], description=h["description"],
+                interaction_type=h["interaction_type"], interaction_config=config,
+                xiaomo_gif_code=h["xiaomo_gif_code"], priority=h["priority"] or 0,
+                status=h["status"], source_type=h.get("source_type", "manual"),
+                confidence=h.get("confidence"), evidence_json=h.get("evidence_json"),
+                review_status=h.get("review_status", "approved"),
+                bubble_text=h.get("bubble_text") or "",
+                created_at=h["created_at"], updated_at=h["updated_at"],
+            )
+        )
+
+    conn.close()
+    return EpisodePlayInfo(
+        episode_id=ep["episode_id"], drama_id=ep["drama_id"],
+        title=ep["title"] or "", duration_ms=ep["duration"] * 1000,
+        highlights=highlights,
+    )
+
+
+@router.post("/progress")
+def report_progress(req: ProgressReport):
+    conn = get_connection()
+    cursor = conn.cursor()
+    watched = 1 if req.progress > 0 else 0
     cursor.execute(
         "INSERT INTO user_progress (user_id, episode_id, progress, watched) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(user_id, episode_id) DO UPDATE SET progress = ?, watched = ?, updated_at = CURRENT_TIMESTAMP",
-        (user_id, episode_id, progress, watched, progress, watched),
+        (req.user_id, req.episode_id, req.progress, watched, req.progress, watched),
     )
     conn.commit()
     conn.close()
@@ -513,30 +446,42 @@ def batch_upsert_highlights(
     updated = 0
 
     for h in highlights:
+        drama_id = h.get("drama_id")
         ep_id = h.get("episode_id")
-        time = h.get("time")
-        if ep_id is None or time is None:
+        if drama_id is None or ep_id is None:
             continue
-        h_type = h.get("type", "famous")
+        h_type = h.get("highlight_type", "emotion_burst")
+        start_ms = h.get("start_time_ms", 0)
+        end_ms = h.get("end_time_ms", 0)
+        hint_offset = h.get("hint_offset_ms", 2000)
         title = h.get("title", "")
-        widget = h.get("widget_type", "emotion")
-        options = json.dumps(h.get("options")) if h.get("options") else None
-        emotion_hints = json.dumps(h.get("emotion_hints")) if h.get("emotion_hints") else None
-        duration = h.get("duration", 15)
+        description = h.get("description")
+        interaction_type = h.get("interaction_type", "reaction_panel")
+        interaction_config = json.dumps(h.get("interaction_config", {}))
+        xiaomo_gif = h.get("xiaomo_gif_code", "")
+        priority = h.get("priority", 0)
+        status = h.get("status", "enabled")
         if "id" in h:
             cursor.execute(
-                """UPDATE highlights SET episode_id=?, time=?, type=?, title=?,
-                   widget_type=?, options=?, emotion_hints=?, duration=?
+                """UPDATE drama_highlight SET drama_id=?, episode_id=?, highlight_type=?,
+                   start_time_ms=?, end_time_ms=?, hint_offset_ms=?, title=?, description=?,
+                   interaction_type=?, interaction_config=?, xiaomo_gif_code=?,
+                   priority=?, status=?, updated_at=CURRENT_TIMESTAMP
                    WHERE id=?""",
-                (ep_id, time, h_type, title, widget, options, emotion_hints, duration, h["id"]),
+                (drama_id, ep_id, h_type, start_ms, end_ms, hint_offset, title, description,
+                 interaction_type, interaction_config, xiaomo_gif,
+                 priority, status, h["id"]),
             )
             if cursor.rowcount > 0:
                 updated += 1
         else:
             cursor.execute(
-                """INSERT INTO highlights (episode_id, time, type, title, widget_type, options, emotion_hints, duration)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ep_id, time, h_type, title, widget, options, emotion_hints, duration),
+                """INSERT INTO drama_highlight (drama_id, episode_id, highlight_type,
+                   start_time_ms, end_time_ms, hint_offset_ms, title, description,
+                   interaction_type, interaction_config, xiaomo_gif_code, priority, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (drama_id, ep_id, h_type, start_ms, end_ms, hint_offset, title, description,
+                 interaction_type, interaction_config, xiaomo_gif, priority, status),
             )
             inserted += 1
     conn.commit()
@@ -549,7 +494,7 @@ def get_highlights_version(user: dict = Depends(get_current_user)):
     """获取高光点数据版本号，供客户端判断是否需要刷新缓存"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT MAX(id) as last_id, COUNT(*) as total FROM highlights")
+    cursor.execute("SELECT MAX(id) as last_id, COUNT(*) as total FROM drama_highlight")
     row = cursor.fetchone()
     conn.close()
     return {"version": row["last_id"] or 0, "total_count": row["total"]}
@@ -560,7 +505,7 @@ def delete_highlight(highlight_id: int, user: dict = Depends(get_current_user)):
     """删除单条高光点"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM highlights WHERE id = ?", (highlight_id,))
+    cursor.execute("DELETE FROM drama_highlight WHERE id = ?", (highlight_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -673,13 +618,15 @@ def toggle_like(episode_id: int, user_id: str = Body(..., embed=True)):
     row = cursor.fetchone()
     if row:
         cursor.execute("DELETE FROM episode_likes WHERE id = ?", (row["id"],))
+        cursor.execute("UPDATE episodes SET like_count = MAX(0, like_count - 1) WHERE episode_id = ?", (episode_id,))
         action = "unliked"
     else:
         cursor.execute("INSERT INTO episode_likes (user_id, episode_id) VALUES (?,?)", (uid, episode_id))
+        cursor.execute("UPDATE episodes SET like_count = like_count + 1 WHERE episode_id = ?", (episode_id,))
         action = "liked"
     conn.commit()
-    cursor.execute("SELECT COUNT(*) as cnt FROM episode_likes WHERE episode_id = ?", (episode_id,))
-    count = cursor.fetchone()["cnt"]
+    cursor.execute("SELECT like_count FROM episodes WHERE episode_id = ?", (episode_id,))
+    count = cursor.fetchone()["like_count"]
     conn.close()
     return {"ok": True, "action": action, "count": count}
 
@@ -689,8 +636,9 @@ def get_likes(episode_id: int, user_id: str = Query(default="")):
     """获取点赞数 + 当前用户是否已点赞"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) as cnt FROM episode_likes WHERE episode_id = ?", (episode_id,))
-    count = cursor.fetchone()["cnt"]
+    cursor.execute("SELECT like_count FROM episodes WHERE episode_id = ?", (episode_id,))
+    row = cursor.fetchone()
+    count = row["like_count"] if row else 0
     liked = False
     if user_id:
         uid = user_id
@@ -737,13 +685,17 @@ def toggle_favorite(drama_id: int, user_id: str = Body(..., embed=True)):
     row = cursor.fetchone()
     if row:
         cursor.execute("DELETE FROM user_favorites WHERE id = ?", (row["id"],))
+        cursor.execute("UPDATE dramas SET fav_count = MAX(0, fav_count - 1) WHERE id = ?", (drama_id,))
         action = "unfavorited"
     else:
         cursor.execute("INSERT INTO user_favorites (user_id, drama_id) VALUES (?,?)", (uid, drama_id))
+        cursor.execute("UPDATE dramas SET fav_count = fav_count + 1 WHERE id = ?", (drama_id,))
         action = "favorited"
     conn.commit()
+    cursor.execute("SELECT fav_count FROM dramas WHERE id = ?", (drama_id,))
+    fav_count = cursor.fetchone()["fav_count"]
     conn.close()
-    return {"ok": True, "action": action}
+    return {"ok": True, "action": action, "fav_count": fav_count}
 
 
 @router.get("/user/favorites")
@@ -928,6 +880,7 @@ def post_comment(
            VALUES (?,?,?,?,?,?,?)""",
         (episode_id, str(uid), nickname, pure_text, parent_id, reply_to_nickname_safe, datetime.now().isoformat())
     )
+    cursor.execute("UPDATE episodes SET comment_count = comment_count + 1 WHERE episode_id = ?", (episode_id,))
     conn.commit()
     cursor.execute("SELECT last_insert_rowid()")
     new_id = cursor.fetchone()[0]
@@ -995,10 +948,10 @@ def get_episode_comments(episode_id: int, limit: int = Query(50, ge=1, le=200), 
 def get_episode_counts(episode_id: int, user_id: str = Query(default="")):
     """当前剧集点赞数+评论数+弹幕数+当前用户是否已点赞 完全绑定当前登录用户"""
     conn = get_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM episode_likes WHERE episode_id = ?", (episode_id,))
-    like_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM episode_comments WHERE episode_id = ?", (episode_id,))
-    comment_count = cursor.fetchone()[0]
+    cursor.execute("SELECT like_count, comment_count FROM episodes WHERE episode_id = ?", (episode_id,))
+    row = cursor.fetchone()
+    like_count = row["like_count"] if row else 0
+    comment_count = row["comment_count"] if row else 0
     cursor.execute("SELECT COUNT(*) FROM danmaku WHERE episode_id = ?", (episode_id,))
     danmaku_count = cursor.fetchone()[0]
     liked = False
@@ -1152,10 +1105,10 @@ async def trigger_highlight_bubble(
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT h.id, h.time, h.title, h.type
-        FROM highlights h
-        WHERE h.episode_id = ? AND ABS(h.time - ?) <= 3
-        ORDER BY ABS(h.time - ?) ASC
+        SELECT h.id, h.start_time_ms, h.title, h.highlight_type
+        FROM drama_highlight h
+        WHERE h.episode_id = ? AND ABS(h.start_time_ms / 1000.0 - ?) <= 3
+        ORDER BY ABS(h.start_time_ms / 1000.0 - ?) ASC
         LIMIT 1
     """, (episode_id, current_second, current_second))
     hl = cursor.fetchone()
@@ -1166,13 +1119,18 @@ async def trigger_highlight_bubble(
 
     # 基于高光点类型生成贴合情节的小墨活泼短气泡
     bubble_map = {
-        "conflict": "哇塞这也太刺激了！",
-        "twist": "完全没想到啊！",
-        "sweet": "磕到了磕到了🥰",
-        "funny": "笑不活了家人们😂",
-        "famous": "名场面来了！盯紧屏幕！"
+        "cliffhanger": "悬念拉满了！",
+        "choice_point": "你会怎么选？",
+        "emotional_burst": "破防了破防了😭",
+        "power_moment": "燃起来了🔥",
+        "comedy": "笑不活了家人们😂",
+        "suspense": "紧张到窒息...",
+        "heartbreak": "刀子来得太快💔",
+        "sweet_moment": "磕到了磕到了🥰",
+        "reversal": "完全没想到啊！",
+        "slapback": "打脸来得太快！"
     }
-    short_bubble = bubble_map.get(hl["type"], f"✨ {hl['title'][:12]}")
+    short_bubble = bubble_map.get(hl["highlight_type"], f"✨ {hl['title'][:12]}")
 
     # 尝试用 LLM 生成更贴合剧情的观众吐槽
     if llm_service.is_available:
@@ -1194,7 +1152,7 @@ async def trigger_highlight_bubble(
 - 不要客观描述，要主观感受
 - 不要说"这一集"、"这里"等指代词汇
 
-高光时刻：{hl['title']}（类型：{hl['type']}）
+高光时刻：{hl['title']}（类型：{hl['highlight_type']}）
 剧情背景：{summary[:200] or '暂无'}
 
 只说这一句话，不要加引号："""
@@ -1240,40 +1198,18 @@ async def trigger_highlight_bubble(
 
 @router.get("/highlights/{highlight_id}/bubble")
 async def get_highlight_bubble(highlight_id: int):
-    """按 highlight_id 获取LLM生成的剧情吐槽气泡"""
+    """获取高光点气泡文案（从数据库读取，分析时预生成）"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT h.title, h.type, h.episode_id FROM highlights h WHERE h.id = ?", (highlight_id,))
+    cursor.execute("SELECT bubble_text, title FROM drama_highlight WHERE id = ?", (highlight_id,))
     hl = cursor.fetchone()
+    conn.close()
     if not hl:
-        conn.close()
         raise HTTPException(status_code=404, detail="高光点不存在")
-    bubble_map = {"conflict": "哇塞这也太刺激了！","twist": "完全没想到啊！","sweet": "磕到了磕到了🥰","funny": "笑不活了家人们😂","famous": "名场面来了！盯紧屏幕！"}
-    result = bubble_map.get(hl["type"], f"✨ {hl['title'][:12]}")
-
-    if llm_service.is_available:
-        cursor.execute("SELECT summary FROM drama_summaries WHERE episode_id = ? LIMIT 1", (hl["episode_id"],))
-        summary_row = cursor.fetchone()
-        summary = summary_row["summary"] if summary_row else ""
-        conn.close()
-        import asyncio as _asyncio, threading
-        prompt = f"""你是正在看短剧的真实观众，看到这个高光时刻，用一句话表达第一反应。要求：8-16字，像真人吐槽、惊讶、激动，主观感受，不指代。\n高光：{hl['title']}（{hl['type']}）\n背景：{summary[:200] or '暂无'}\n只说这句话："""
-        async def _gen():
-            try:
-                async with llm_service.client as c:
-                    r = await _asyncio.wait_for(c.chat.completions.create(model=settings.DOUBAO_EP_ID,messages=[{"role":"user","content":prompt}],stream=False,temperature=0.9,max_tokens=60),timeout=8.0)
-                    t = (r.choices[0].message.content or "").strip()
-                    if 4 <= len(t) <= 40 and not t.startswith("（"): return t
-            except: pass
-            return None
-        holder = []
-        th = threading.Thread(target=lambda: holder.append(_asyncio.run(_gen())), daemon=True)
-        th.start()
-        th.join(timeout=10.0)
-        if holder and holder[0]: result = holder[0]
-    else:
-        conn.close()
-    return {"ok": True, "bubble_text": result}
+    bubble = hl["bubble_text"] or ""
+    if not bubble:
+        bubble = hl["title"] or ""
+    return {"ok": True, "bubble_text": bubble}
 
 
 # ===== 剧情投票 =====
@@ -1345,108 +1281,57 @@ def cast_highlight_vote(highlight_id: int, user_id: str = Body(...), choice: str
     return {"ok": True, "counts": counts}
 
 
-# ===== AI剧情问答 =====
+# ===== 用户互动上报 =====
 
-@router.get("/highlights/{highlight_id}/quiz")
-async def get_highlight_quiz(highlight_id: int):
-    """基于高光点生成AI剧情选择题，用LLM动态出题"""
+@router.post("/interactions")
+def report_interaction(req: InteractionReport):
+    """记录用户对高光点的互动行为"""
+    if req.interaction_type not in ("support_button", "reaction_panel", "choice_panel"):
+        raise HTTPException(status_code=400, detail="invalid interaction_type")
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT h.title, h.type, h.episode_id, e.episode_num, d.title as drama_title FROM highlights h JOIN episodes e ON h.episode_id = e.episode_id JOIN dramas d ON e.drama_id = d.id WHERE h.id = ?", (highlight_id,))
-    hl = cursor.fetchone()
-    if not hl:
+    # 校验 highlight 存在
+    cursor.execute("SELECT id FROM drama_highlight WHERE id = ?", (req.highlight_id,))
+    if not cursor.fetchone():
         conn.close()
-        raise HTTPException(status_code=404, detail="高光点不存在")
-
-    # 取该集摘要作为出题依据
-    cursor.execute("SELECT summary FROM drama_summaries WHERE episode_id = ? LIMIT 1", (hl["episode_id"],))
-    summary_row = cursor.fetchone()
-    summary = summary_row["summary"] if summary_row else ""
-    conn.close()
-
-    if not llm_service.is_available:
-        return {"ok": True, "quiz": None, "fallback": True}
-
-    prompt = f"""你是短剧剧情出题专家。基于以下高光点出1道选择题：
-剧集：《{hl['drama_title']}》第{hl['episode_num']}集
-高光点：{hl['title']}（类型：{hl['type']}）
-剧情摘要：{summary[:300]}
-
-要求：
-- 问题要贴合剧情，有思考价值
-- 4个选项（A/B/C/D），只有1个正确答案
-- 返回严格JSON格式，不要任何其他文字
-
-JSON格式：
-{{"question":"题面","A":"选项A","B":"选项B","C":"选项C","D":"选项D","answer":"A"}}
-"""
-
-    try:
-        import asyncio
-        async with llm_service.client as client:
-            resp = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=settings.DOUBAO_EP_ID,
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=False,
-                    temperature=0.7,
-                    max_tokens=300,
-                ),
-                timeout=15.0,
-            )
-            text = (resp.choices[0].message.content or "").strip()
-            import re
-            m = re.search(r'\{[^{}]*"question"[^}]*\}', text, re.DOTALL)
-            if m:
-                quiz = json.loads(m.group())
-                return {"ok": True, "quiz": quiz}
-    except Exception:
-        pass
-
-    return {"ok": True, "quiz": None, "fallback": True}
-
-
-@router.post("/highlights/{highlight_id}/quiz/answer")
-def submit_quiz_answer(highlight_id: int, user_id: str = Body(...), answer: str = Body(...)):
-    """提交答案，自动评分+累计积分"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    uid = user_id
+        raise HTTPException(status_code=404, detail="highlight not found")
     cursor.execute(
-        "INSERT OR IGNORE INTO user_quiz_scores (user_id, highlight_id, score) VALUES (?,?,0)",
-        (uid, highlight_id),
+        """INSERT INTO user_interaction
+           (user_id, device_id, drama_id, episode_id, highlight_id, interaction_type, option_key, option_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (req.user_id, req.device_id, req.drama_id, req.episode_id,
+         req.highlight_id, req.interaction_type, req.option_key, req.option_label),
     )
+    new_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return {"ok": True}
+    return {"success": True, "interaction_id": new_id}
 
 
-@router.post("/quiz/score")
-def update_quiz_score(user_id: str = Body(...), highlight_id: int = Body(...), is_correct: bool = Body(...)):
-    """更新答题积分（答对+1）"""
+@router.get("/highlights/{highlight_id}/stats", response_model=InteractionStats)
+def get_highlight_stats(highlight_id: int):
+    """统计某个高光点的互动数据"""
     conn = get_connection()
     cursor = conn.cursor()
-    uid = user_id
-    if is_correct:
-        cursor.execute(
-            "UPDATE user_quiz_scores SET score = score + 1 WHERE user_id = ? AND highlight_id = ?",
-            (uid, highlight_id),
-        )
-    conn.commit()
+    cursor.execute("SELECT COUNT(*) as cnt FROM user_interaction WHERE highlight_id = ?", (highlight_id,))
+    total = cursor.fetchone()["cnt"] or 0
+    cursor.execute(
+        """SELECT option_key, option_label, COUNT(*) as cnt
+           FROM user_interaction WHERE highlight_id = ?
+           GROUP BY option_key, option_label ORDER BY cnt DESC""",
+        (highlight_id,),
+    )
+    rows = cursor.fetchall()
     conn.close()
-    return {"ok": True}
-
-
-@router.get("/user/quiz-score")
-def get_user_quiz_score(user_id: str = Query(...)):
-    """获取用户答题总积分"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    uid = user_id
-    cursor.execute("SELECT COALESCE(SUM(score),0) as total, COUNT(*) as answered FROM user_quiz_scores WHERE user_id = ?", (uid,))
-    row = cursor.fetchone()
-    conn.close()
-    return {"total_score": row["total"], "answered_count": row["answered"]}
+    options = []
+    for r in rows:
+        options.append({
+            "option_key": r["option_key"],
+            "option_label": r["option_label"],
+            "count": r["cnt"],
+            "percent": round(r["cnt"] / total * 100, 1) if total > 0 else 0.0,
+        })
+    return InteractionStats(highlight_id=highlight_id, total_count=total, options=options)
 
 
 # ===== 角色AI对话 =====
@@ -1532,7 +1417,6 @@ def create_note(
     user_id: str = Body(...),
     text: str = Body(...),
     time_sec: float = Body(default=0),
-    drama_id: int = Body(default=0),
 ):
     """播放中一键标记高能时刻+吐槽"""
     if not text.strip() or len(text) > 300:
@@ -1540,10 +1424,9 @@ def create_note(
     conn = get_connection()
     cursor = conn.cursor()
     uid = user_id
-    from datetime import datetime
     cursor.execute(
-        "INSERT INTO user_notes (user_id, episode_id, drama_id, note_text, time_sec) VALUES (?,?,?,?,?)",
-        (uid, episode_id, drama_id, text.strip(), time_sec),
+        "INSERT INTO user_notes (user_id, episode_id, note_text, time_sec) VALUES (?,?,?,?)",
+        (uid, episode_id, text.strip(), time_sec),
     )
     conn.commit()
     new_id = cursor.lastrowid
@@ -1576,7 +1459,7 @@ def get_user_all_notes(user_id: str = Query(...), limit: int = Query(default=50,
     cursor = conn.cursor()
     uid = user_id
     cursor.execute("""
-        SELECT un.id, un.note_text, un.time_sec, un.created_at, un.episode_id, e.episode_num, d.title as drama_title
+        SELECT un.id, un.note_text, un.time_sec, un.created_at, un.episode_id, e.episode_num, e.drama_id, d.title as drama_title
         FROM user_notes un
         JOIN episodes e ON un.episode_id = e.episode_id
         JOIN dramas d ON e.drama_id = d.id
@@ -1590,7 +1473,7 @@ def get_user_all_notes(user_id: str = Query(...), limit: int = Query(default=50,
         {
             "id": r["id"], "text": r["note_text"], "time_sec": r["time_sec"],
             "created_at": r["created_at"], "episode_id": r["episode_id"],
-            "episode_num": r["episode_num"], "drama_title": r["drama_title"],
+            "episode_num": r["episode_num"], "drama_id": r["drama_id"], "drama_title": r["drama_title"],
         }
         for r in rows
     ]
@@ -1609,11 +1492,11 @@ def get_user_notes_count(user_id: str = Query(...)):
 
 
 @router.delete("/notes/{note_id}")
-def delete_note(note_id: int):
+def delete_note(note_id: int, user_id: str = Query(...)):
     """删除某条笔记"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM user_notes WHERE id = ?", (note_id,))
+    cursor.execute("DELETE FROM user_notes WHERE id = ? AND user_id = ?", (note_id, user_id))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -1712,3 +1595,40 @@ def cast_branch_vote(drama_id: int, user_id: str = Body(...), choice: str = Body
         counts[r["choice"]] = r["cnt"]
     conn.close()
     return {"ok": True, "counts": counts}
+
+
+# ===== 小墨 GIF 动效接口 =====
+@router.get("/xiaomo/gif/{code}", response_model=dict)
+def get_xiaomo_gif_by_code(code: str):
+    """根据 code 查询单个 GIF"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM xiaomo_gif WHERE code = ?", (code,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="GIF not found")
+    return {"ok": True, "data": dict(row)}
+
+
+@router.get("/xiaomo/gifs", response_model=dict)
+def list_xiaomo_gifs(
+    highlight_type: Optional[str] = Query(None, description="按高光类型筛选"),
+    status: Optional[str] = Query("published", description="状态筛选，默认 published"),
+):
+    """查询 GIF 列表：可按 highlight_type + status 组合筛选"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if highlight_type:
+        cursor.execute(
+            "SELECT * FROM xiaomo_gif WHERE highlight_type = ? AND status = ? ORDER BY id",
+            (highlight_type, status),
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM xiaomo_gif WHERE status = ? ORDER BY id",
+            (status,),
+        )
+    rows = cursor.fetchall()
+    conn.close()
+    return {"ok": True, "data": [dict(r) for r in rows], "count": len(rows)}

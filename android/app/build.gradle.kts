@@ -15,6 +15,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        buildConfigField("String", "API_BASE_URL", "\"http://192.168.43.69:8000/\"")
     }
 
     buildTypes {
@@ -32,6 +33,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 

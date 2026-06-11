@@ -37,18 +37,32 @@ def init_db():
             FOREIGN KEY (drama_id) REFERENCES dramas(id)
         );
 
-        CREATE TABLE IF NOT EXISTS highlights (
+        CREATE TABLE IF NOT EXISTS drama_highlight (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
             episode_id INTEGER NOT NULL,
-            time REAL NOT NULL,
-            type TEXT NOT NULL,
-            title TEXT DEFAULT '',
-            widget_type TEXT DEFAULT 'emotion',
-            options TEXT DEFAULT NULL,
-            emotion_hints TEXT DEFAULT NULL,
-            duration INTEGER DEFAULT 15,
-            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
+            highlight_type TEXT NOT NULL,
+            start_time_ms INTEGER NOT NULL,
+            end_time_ms INTEGER NOT NULL,
+            hint_offset_ms INTEGER DEFAULT 2000,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT NULL,
+            interaction_type TEXT NOT NULL,
+            interaction_config TEXT NOT NULL,
+            xiaomo_gif_code TEXT NOT NULL,
+            priority INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'enabled',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drama_id) REFERENCES dramas(id),
+            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id),
+            FOREIGN KEY (xiaomo_gif_code) REFERENCES xiaomo_gif(code)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_dh_episode_time ON drama_highlight(episode_id, start_time_ms, end_time_ms);
+        CREATE INDEX IF NOT EXISTS idx_dh_drama_episode ON drama_highlight(drama_id, episode_id);
+        CREATE INDEX IF NOT EXISTS idx_dh_type ON drama_highlight(highlight_type);
+        CREATE INDEX IF NOT EXISTS idx_dh_status ON drama_highlight(status);
 
         CREATE TABLE IF NOT EXISTS user_progress (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +83,7 @@ def init_db():
             interaction_data TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (episode_id) REFERENCES episodes(episode_id),
-            FOREIGN KEY (highlight_id) REFERENCES highlights(id)
+            FOREIGN KEY (highlight_id) REFERENCES drama_highlight(id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_interactions_user ON user_interactions(user_id);
@@ -140,6 +154,25 @@ def init_db():
             FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
         );
 
+        CREATE TABLE IF NOT EXISTS user_interaction (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT NULL,
+            device_id TEXT DEFAULT NULL,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            highlight_id INTEGER NOT NULL,
+            interaction_type TEXT NOT NULL,
+            option_key TEXT DEFAULT NULL,
+            option_label TEXT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (highlight_id) REFERENCES drama_highlight(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ui_highlight ON user_interaction(highlight_id);
+        CREATE INDEX IF NOT EXISTS idx_ui_episode ON user_interaction(episode_id);
+        CREATE INDEX IF NOT EXISTS idx_ui_device_hl ON user_interaction(device_id, highlight_id);
+        CREATE INDEX IF NOT EXISTS idx_ui_created ON user_interaction(created_at);
+
         CREATE TABLE IF NOT EXISTS episode_likes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
@@ -178,7 +211,7 @@ def init_db():
             question TEXT NOT NULL,
             option_a TEXT NOT NULL,
             option_b TEXT NOT NULL,
-            FOREIGN KEY (highlight_id) REFERENCES highlights(id)
+            FOREIGN KEY (highlight_id) REFERENCES drama_highlight(id)
         );
 
         CREATE TABLE IF NOT EXISTS highlight_vote_records (
@@ -252,6 +285,93 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON user_chat_sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON user_chat_messages(session_id);
+
+        -- xiaomo_gif 小墨GIF动效资源表（drama_highlight 外键依赖）
+        CREATE TABLE IF NOT EXISTS xiaomo_gif (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            gif_url TEXT NOT NULL,
+            highlight_type TEXT,
+            description TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'published',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_xiaomo_gif_highlight_type ON xiaomo_gif(highlight_type);
+        CREATE INDEX IF NOT EXISTS idx_xiaomo_gif_status ON xiaomo_gif(status);
+
+        -- video_analysis_task 视频分析任务记录
+        CREATE TABLE IF NOT EXISTS video_analysis_task (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            video_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            progress INTEGER DEFAULT 0,
+            result_json TEXT DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            started_at TEXT DEFAULT NULL,
+            finished_at TEXT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_vat_episode ON video_analysis_task(episode_id, created_at);
+
+        -- episode_transcript 每集台词表
+        CREATE TABLE IF NOT EXISTS episode_transcript (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            start_time_ms INTEGER NOT NULL,
+            end_time_ms INTEGER NOT NULL,
+            speaker TEXT DEFAULT '',
+            text TEXT NOT NULL,
+            confidence REAL DEFAULT NULL,
+            source_type TEXT NOT NULL DEFAULT 'asr',
+            language TEXT DEFAULT 'zh',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_et_episode_time ON episode_transcript(episode_id, start_time_ms);
+        CREATE INDEX IF NOT EXISTS idx_et_drama_episode ON episode_transcript(drama_id, episode_id);
+
+        -- episode_scene_segment 剧情片段切分
+        CREATE TABLE IF NOT EXISTS episode_scene_segment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            start_time_ms INTEGER NOT NULL,
+            end_time_ms INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            dialogue_text TEXT DEFAULT '',
+            visual_summary TEXT DEFAULT '',
+            emotion_tags_json TEXT DEFAULT '[]',
+            candidate_highlight_type TEXT DEFAULT NULL,
+            confidence REAL DEFAULT NULL,
+            evidence_json TEXT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_ess_episode_time ON episode_scene_segment(episode_id, start_time_ms);
+        CREATE INDEX IF NOT EXISTS idx_ess_candidate_hl ON episode_scene_segment(candidate_highlight_type);
+
+        -- episode_content_summary 每集内容整体摘要
+        CREATE TABLE IF NOT EXISTS episode_content_summary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drama_id INTEGER NOT NULL,
+            episode_id INTEGER NOT NULL,
+            title TEXT DEFAULT '',
+            short_summary TEXT DEFAULT '',
+            long_summary TEXT DEFAULT '',
+            character_actions_json TEXT DEFAULT NULL,
+            plot_points_json TEXT DEFAULT NULL,
+            conflict_json TEXT DEFAULT NULL,
+            ending_hook TEXT DEFAULT NULL,
+            generated_by TEXT DEFAULT 'ai_video_analysis',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     conn.commit()
@@ -263,56 +383,18 @@ def migrate_add_columns():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # highlights.time 改为 REAL 支持小数秒
-    try:
-        cursor.execute("ALTER TABLE highlights RENAME TO highlights_old")
-        cursor.execute("""
-            CREATE TABLE highlights (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                episode_id INTEGER NOT NULL,
-                time REAL NOT NULL,
-                type TEXT NOT NULL,
-                title TEXT DEFAULT '',
-                widget_type TEXT DEFAULT 'emotion',
-                options TEXT DEFAULT NULL,
-                emotion_hints TEXT DEFAULT NULL,
-                duration INTEGER DEFAULT 15,
-                FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
-            )
-        """)
-        cursor.execute("""
-            INSERT INTO highlights(id, episode_id, time, type, title, widget_type, options)
-            SELECT id, episode_id, CAST(time AS REAL), type, title, 
-                   COALESCE(widget_type, 'emotion'), options
-            FROM highlights_old
-        """)
-        cursor.execute("DROP TABLE highlights_old")
-    except sqlite3.OperationalError:
-        pass  # 迁移已执行过，静默跳过
-    # 检查新增字段是否存在
-    for col in ["widget_type", "emotion_hints", "duration"]:
+    # drama_highlight 新增 AI 分析字段
+    for col, col_type in [
+        ("source_type", "TEXT DEFAULT 'manual'"),
+        ("confidence", "REAL DEFAULT NULL"),
+        ("evidence_json", "TEXT DEFAULT NULL"),
+        ("review_status", "TEXT DEFAULT 'approved'"),
+        ("bubble_text", "TEXT DEFAULT ''"),
+    ]:
         try:
-            cursor.execute(f"ALTER TABLE highlights ADD COLUMN {col} TEXT DEFAULT NULL")
+            cursor.execute(f"ALTER TABLE drama_highlight ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass
-
-    # user_interactions 表
-    try:
-        cursor.execute("SELECT 1 FROM user_interactions LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_interactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                episode_id INTEGER NOT NULL,
-                highlight_id INTEGER,
-                module_id TEXT NOT NULL,
-                interaction_data TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (episode_id) REFERENCES episodes(episode_id),
-                FOREIGN KEY (highlight_id) REFERENCES highlights(id)
-            )
-        """)
 
     # episode_comments 评论表 reply_to_nickname 字段安全迁移
     for col, col_type in [("reply_to_nickname", "TEXT DEFAULT ''"), ("parent_id", "INTEGER DEFAULT 0")]:

@@ -166,9 +166,11 @@ class LLMService:
 
         prompt = f"""你是短剧高光点标注专家。
 请基于以下剧集内容，自动识别剧情高光点：
-- 类型：conflict（冲突）、twist（反转）、sweet（甜蜜）、famous（名场面）、funny（搞笑）
+- highlight_type 取值：cliffhanger（悬念钩子）、choice_point（选择节点）、emotional_burst（情绪爆发）、
+  power_moment（爽点时刻）、comedy（搞笑瞬间）、suspense（紧张悬念）、
+  heartbreak（虐心时刻）、sweet_moment（甜蜜时刻）、reversal（惊天反转）、slapback（打脸爽点）
 - 每集标注 3-8 个高光点
-- 时间点单位是秒，总时长约 {episode_duration} 秒
+- 时间点单位是毫秒，总时长约 {int(episode_duration * 1000)} 毫秒
 - 返回严格的 JSON 数组，不要其他说明文字
 
 剧集名：{drama_title}
@@ -177,7 +179,7 @@ class LLMService:
 
 输出格式示例：
 [
-  {{"time": 45.5, "type": "conflict", "title": "男主霸气护妻", "widget_type": "emotion", "emotion_hints": ["爽！", "太解气了"]}}
+  {{"start_time_ms": 45000, "end_time_ms": 55000, "highlight_type": "emotional_burst", "title": "男主霸气护妻", "interaction_type": "reaction_panel", "interaction_config": {{"emotions": ["爽！", "太解气了"]}}, "xiaomo_gif_code": "emotional_burst"}}
 ]
 """
 
@@ -339,13 +341,6 @@ def get_user_profile_summary(user_id: str) -> str:
     """)
     top_dramas = [dict(r) for r in cursor.fetchall()]
 
-    # 互动统计
-    cursor.execute(
-        "SELECT module_id, COUNT(*) as cnt FROM user_interactions WHERE user_id = ? GROUP BY module_id",
-        (user_id,),
-    )
-    interaction_stats = {r["module_id"]: r["cnt"] for r in cursor.fetchall()}
-
     conn.close()
 
     parts = []
@@ -356,14 +351,6 @@ def get_user_profile_summary(user_id: str) -> str:
             parts.append(f"最爱看的是《{names}》")
     else:
         parts.append("你还没有看过短剧哦，快去看看吧~")
-
-    if interaction_stats:
-        emotion_count = interaction_stats.get("emotion", 0)
-        vote_count = interaction_stats.get("vote", 0)
-        if emotion_count > 0:
-            parts.append(f"发了 {emotion_count} 次情绪弹幕")
-        if vote_count > 0:
-            parts.append(f"参与了 {vote_count} 次剧情投票")
 
     return "！".join(parts) + "！" if parts else "小墨还没记住你呢，一起看剧吧~"
 
@@ -473,20 +460,20 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
         hl_params.append(f"%{kw}%")
     if hl_conditions:
         sql = """
-            SELECT h.time, h.title, e.episode_num
-            FROM highlights h
+            SELECT h.start_time_ms, h.title, e.episode_num
+            FROM drama_highlight h
             JOIN episodes e ON h.episode_id = e.episode_id
             WHERE """ + " OR ".join(hl_conditions)
         if drama_id:
             sql += " AND e.drama_id = ?"
             hl_params.append(drama_id)
-        sql += " ORDER BY e.episode_num, h.time LIMIT 10"
+        sql += " ORDER BY e.episode_num, h.start_time_ms LIMIT 10"
         cursor.execute(sql, hl_params)
         hl_rows = cursor.fetchall()
         if hl_rows:
             lines = ["【核心高光点】"]
             for hl in hl_rows:
-                lines.append(f"  第{hl['episode_num']}集 @{hl['time']:.0f}秒 → {hl['title']}")
+                lines.append(f"  第{hl['episode_num']}集 @{hl['start_time_ms'] // 1000}秒 → {hl['title']}")
             parts.append("\n".join(lines))
 
     # 5. 摘要兜底：取当前剧集（或最近几集）的摘要

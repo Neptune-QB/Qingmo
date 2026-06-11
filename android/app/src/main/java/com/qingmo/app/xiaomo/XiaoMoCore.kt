@@ -79,38 +79,20 @@ object XiaoMoCore {
         "slapback" to "打脸来得太快！",
     )
 
+    private var _onHintDanmaku: ((DramaHighlight) -> Unit)? = null
+    fun setOnHintDanmaku(callback: (DramaHighlight) -> Unit) { _onHintDanmaku = callback }
+
     fun triggerDanmakuHint(highlight: DramaHighlight) {
         _hintDismissTimer?.cancel()
-        val bubble = bubbleMap[highlight.highlightType] ?: highlight.title
-        _state.value = _state.value.copy(
-            pose = XiaoMoPose.Shaking,
-            pendingDanmakuHighlight = highlight,
-            bubbleText = bubble,
-        )
-        // 异步获取 LLM 生成的剧情吐槽气泡
-        GlobalScope.launch(Dispatchers.IO) {
-            try {
-                val resp = com.qingmo.app.data.api.RetrofitClient.api.getHighlightBubble(highlight.id)
-                val llmBubble = resp["bubble_text"] as? String
-                if (!llmBubble.isNullOrEmpty() && llmBubble != bubble) {
-                    _state.value = _state.value.copy(bubbleText = llmBubble)
-                }
-            } catch (_: Exception) {}
-        }
-        _hintDismissTimer = GlobalScope.launch(Dispatchers.Main) {
-            delay(12000L)
-            setPose(XiaoMoPose.Idle)
-            _state.value = _state.value.copy(pendingDanmakuHighlight = null, bubbleText = "")
-        }
+        // 直接发飘屏弹幕，不走气泡
+        _onHintDanmaku?.invoke(highlight)
     }
 
-    fun onDanmakuSentSuccess() {
+    fun dismissHint() {
         _hintDismissTimer?.cancel()
-        _state.value = _state.value.copy(pose = XiaoMoPose.ThumbsUp, pendingDanmakuHighlight = null, bubbleText = "")
-        GlobalScope.launch(Dispatchers.Main) {
-            delay(1200L)
-            setPose(XiaoMoPose.Idle)
-        }
+        _hintDismissTimer = null
+        setPose(XiaoMoPose.Idle)
+        _state.value = _state.value.copy(pendingDanmakuHighlight = null, bubbleText = "")
     }
 
     fun skipToNextHighlight() {

@@ -3,6 +3,7 @@ package com.qingmo.app.data.api
 import com.qingmo.app.data.model.DramaBrief
 import com.qingmo.app.data.model.DramaDetail
 import com.qingmo.app.data.model.PlaybackInfo
+import com.qingmo.app.data.model.ProgressReport
 import com.qingmo.app.data.user.UserProfile
 import com.qingmo.app.data.user.UserProfileUpdate
 import com.qingmo.app.data.user.WatchHistoryItem
@@ -30,13 +31,7 @@ interface ApiService {
 
     @POST("api/v1/progress")
     suspend fun reportProgress(
-        @Query("episode_id") episodeId: Long,
-        @Query("progress") progress: Int,
-    )
-
-    @POST("api/v1/interactions")
-    suspend fun reportInteraction(
-        @Body body: Map<String, @JvmSuppressWildcards Any>,
+        @Body body: ProgressReport,
     )
 
     @GET("api/v1/user/profile")
@@ -167,12 +162,6 @@ interface ApiService {
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Map<String, @JvmSuppressWildcards Any>
 
-    // AI剧情问答
-    @GET("api/v1/highlights/{highlightId}/quiz")
-    suspend fun getHighlightQuiz(
-        @Path("highlightId") highlightId: Int,
-    ): Map<String, @JvmSuppressWildcards Any>
-
     // 角色AI对话
     @GET("api/v1/characters")
     suspend fun listCharacters(
@@ -207,6 +196,24 @@ interface ApiService {
     @DELETE("api/v1/notes/{noteId}")
     suspend fun deleteNote(
         @Path("noteId") noteId: Int,
+        @Query("user_id") userId: String,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // 用户互动上报
+    @POST("api/v1/interactions")
+    suspend fun reportInteraction(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    @GET("api/v1/highlights/{highlightId}/stats")
+    suspend fun getHighlightStats(
+        @Path("highlightId") highlightId: Int,
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    // 小墨 GIF
+    @GET("api/v1/xiaomo/gif/{code}")
+    suspend fun getXiaoMoGif(
+        @Path("code") code: String,
     ): Map<String, @JvmSuppressWildcards Any>
 
     // 剧情分支投票

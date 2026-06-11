@@ -6,10 +6,8 @@ DB_PATH = Path(__file__).parent / "ju_flash.db"
 # P1 完全无业务依赖废弃表清单，扫描确认代码零引用后可安全删除
 P1_DEPRECATED_TABLES = [
     "users",
-    "user_profiles",
     "highlight_votes",
     "highlight_vote_records",
-    "user_quiz_scores",
     "branch_votes",
     "branch_vote_records",
 ]

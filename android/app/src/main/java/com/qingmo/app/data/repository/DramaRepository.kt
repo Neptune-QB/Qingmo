@@ -4,6 +4,7 @@ import com.qingmo.app.data.api.RetrofitClient
 import com.qingmo.app.data.model.DramaBrief
 import com.qingmo.app.data.model.DramaDetail
 import com.qingmo.app.data.model.PlaybackInfo
+import com.qingmo.app.data.model.ProgressReport
 import com.qingmo.app.data.user.UserProfile
 import com.qingmo.app.data.user.UserProfileUpdate
 import com.qingmo.app.data.user.WatchHistoryItem
@@ -36,11 +37,9 @@ class DramaRepository {
     suspend fun reportProgress(
         episodeId: Long,
         progress: Int,
+        userId: String = "0",
     ): Result<Unit> =
-        safeApiCall { api.reportProgress(episodeId, progress) }
-
-    suspend fun reportInteraction(data: Map<String, Any>): Result<Unit> =
-        safeApiCall { api.reportInteraction(data) }
+        safeApiCall { api.reportProgress(ProgressReport(episodeId, progress, userId)) }
 
     suspend fun getUserProfile(userId: String): Result<UserProfile> =
         safeApiCall { api.getUserProfile(userId) }

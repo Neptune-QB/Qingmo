@@ -2,6 +2,7 @@ package com.qingmo.app.data.api
 
 import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
+import com.qingmo.app.BuildConfig
 import com.qingmo.app.data.auth.TokenManager
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -11,7 +12,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    const val BASE_URL = "http://192.168.43.69:8000/"
+    val BASE_URL: String = BuildConfig.API_BASE_URL
 
     /** 鉴权拦截器：自动为所有请求添加 Bearer Token */
     private val authInterceptor = Interceptor { chain ->
@@ -42,7 +43,12 @@ object RetrofitClient {
             }
             .addInterceptor(
                 HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BODY
+                    level =
+                        if (BuildConfig.DEBUG) {
+                            HttpLoggingInterceptor.Level.BASIC
+                        } else {
+                            HttpLoggingInterceptor.Level.NONE
+                        }
                 },
             ).build()
     }

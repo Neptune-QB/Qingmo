@@ -32,7 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 import com.qingmo.app.ui.theme.Border
 import com.qingmo.app.ui.theme.OnSurface
 import com.qingmo.app.ui.theme.Primary
@@ -55,12 +55,12 @@ class EmotionModule : InteractionModule {
     override val moduleName = "情绪弹幕"
     override val priority = 10
 
-    override fun canHandle(highlight: HighlightItem): Boolean =
-        highlight.widgetType == "emotion"
+    override fun canHandle(highlight: DramaHighlight): Boolean =
+        highlight.interactionType == "emotion"
 
     @Composable
     override fun RenderInteraction(
-        highlight: HighlightItem,
+        highlight: DramaHighlight,
         onInteract: (InteractionResult) -> Unit,
         onDismiss: () -> Unit,
     ) {
@@ -88,7 +88,7 @@ class EmotionModule : InteractionModule {
                     InteractionResult(
                         moduleId = moduleId,
                         highlightId = highlight.id,
-                        data = mapOf("emotion" to emotion, "highlight_type" to highlight.type),
+                        data = mapOf("emotion" to emotion, "highlight_type" to highlight.highlightType),
                     ),
                 )
                 onDismiss()

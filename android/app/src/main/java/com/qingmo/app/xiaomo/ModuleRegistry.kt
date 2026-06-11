@@ -1,6 +1,6 @@
 package com.qingmo.app.xiaomo
 
-import com.qingmo.app.data.model.HighlightItem
+import com.qingmo.app.data.model.DramaHighlight
 
 /**
  * 模块注册中心 — 管理所有互动模块的注册/注销/调度
@@ -32,7 +32,7 @@ object ModuleRegistry {
      * 根据高光点的 widget_type 查找匹配的处理器模块
      * @return 匹配的模块，如果没找到返回 null
      */
-    fun findHandler(highlight: HighlightItem): InteractionModule? {
+    fun findHandler(highlight: DramaHighlight): InteractionModule? {
         return modules.firstOrNull { it.canHandle(highlight) }
     }
 

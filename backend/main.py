@@ -8,14 +8,15 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.api.router import router
 from app.api.auth_router import router as auth_router
-from app.database import init_db
+from app.database import init_db, migrate_add_columns
 
 # 启动时自动建表/迁移
 init_db()
+migrate_add_columns()
 
 # 自动填充默认JWT密钥
 if not settings.JWT_SECRET:
-    settings.JWT_SECRET = "qingmo_default_secret_2026"
+    raise RuntimeError("JWT_SECRET must be configured in .env or environment variables")
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -54,6 +55,7 @@ os.makedirs(os.path.join(MEDIA_DIR, "covers"), exist_ok=True)
 os.makedirs(os.path.join(MEDIA_DIR, "videos"), exist_ok=True)
 app.mount("/covers", StaticFiles(directory=os.path.join(MEDIA_DIR, "covers")), name="covers")
 app.mount("/videos", StaticFiles(directory=os.path.join(MEDIA_DIR, "videos")), name="videos")
+app.mount("/xiaomo-gifs", StaticFiles(directory=r"C:\Users\12730\Desktop\Qingmo\android\app\src\main\res\drawable\xiaomo"), name="xiaomo_gifs")
 app.mount("/thumbnails", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "thumbnails")), name="thumbnails")
 
 # 直接在main.py注册这两个profile端点，完全避开router.py中遗留的导入冲突

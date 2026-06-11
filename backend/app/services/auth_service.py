@@ -96,12 +96,11 @@ def register_user(username: str, password: str, nickname: str = "", device_id: s
 
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     pw_hash = hash_password(password)
-    device_ids = json.dumps([device_id]) if device_id else "[]"
 
     cursor.execute(
-        """INSERT INTO users (username, password_hash, nickname, device_ids, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (username, pw_hash, nickname or username, device_ids, now, now),
+        """INSERT INTO users (username, password_hash, nickname, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (username, pw_hash, nickname or username, now, now),
     )
     user_id = cursor.lastrowid
     conn.commit()
@@ -121,7 +120,7 @@ def login_user(username: str, password: str) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, password_hash, nickname, device_ids FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, nickname FROM users WHERE username = ?",
         (username,),
     )
     row = cursor.fetchone()
@@ -143,7 +142,7 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
     """按 ID 获取用户信息"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, nickname, avatar, device_ids, created_at FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT id, username, nickname, avatar, created_at FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -153,7 +152,6 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
         "username": row["username"],
         "nickname": row["nickname"] or row["username"],
         "avatar": row["avatar"] or "",
-        "device_ids": json.loads(row["device_ids"]) if row["device_ids"] else [],
         "created_at": row["created_at"],
     }
 
@@ -193,32 +191,15 @@ def merge_device_data(user_id: int, device_id: str):
     cursor = conn.cursor()
 
     # 全表数据迁移：所有匿名device_id数据全部归属到登录真实用户
-    cursor.execute("UPDATE user_interactions SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE user_progress SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE episode_likes SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE user_favorites SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE danmaku SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE episode_comments SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE highlight_vote_records SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
-    cursor.execute("UPDATE user_quiz_scores SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE branch_vote_records SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE user_notes SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
     cursor.execute("UPDATE user_chat_sessions SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
-    cursor.execute("UPDATE user_profiles SET user_id = ? WHERE user_id = ?", (target_uid, device_id))
-
-    # 更新 users 表的 device_ids 列表
-    cursor.execute("SELECT device_ids FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row and row["device_ids"]:
-        try:
-            ids = json.loads(row["device_ids"])
-        except (json.JSONDecodeError, TypeError):
-            ids = []
-    else:
-        ids = []
-    if device_id not in ids:
-        ids.append(device_id)
-    cursor.execute("UPDATE users SET device_ids = ? WHERE id = ?", (json.dumps(ids), user_id))
 
     conn.commit()
     conn.close()
