@@ -59,7 +59,15 @@ Qingmo/
 
 ### 直接安装
 
-项目根目录提供 `qingmo.apk`，传输到 Android 手机直接安装即可使用（需先启动后端服务）。
+项目根目录提供 `qingmo.apk`，传输到 Android 手机直接安装即可使用。
+
+> ⚠️ 网络要求：APK 默认连接 `http://192.168.43.69:8000/`（手机热点模式下 PC 的 IP）。
+> 1. 手机开启「便携式 WLAN 热点」
+> 2. PC 连接该热点
+> 3. PC 启动后端 `python main.py`
+> 4. 手机打开青墨 App
+>
+> 如使用路由器 WiFi，PC IP 会变化，需重新编译 APK 并修改 `local.properties` 中的 `qingmo.apiBaseUrl`。
 
 ### 环境要求
 
