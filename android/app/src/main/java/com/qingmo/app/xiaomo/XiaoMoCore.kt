@@ -24,29 +24,21 @@ object XiaoMoCore {
     private var effectLockUntil = 0L
     private var _effectResetJob: Job? = null
 
-    /** 设置高光特效 GIF code，锁定 4000ms 后自动回 idle */
+    /** 设置高光特效 GIF code，持续直到显式调用 setIdle */
     fun triggerEffect(code: String) {
         val now = System.currentTimeMillis()
         if (now >= effectLockUntil || _displayCode.value == "idle") {
             _displayCode.value = code
-            effectLockUntil = now + 4000
-            android.util.Log.d("XiaoMoGif", "triggerEffect code=$code lockUntil=$effectLockUntil")
-            // 锁过期后自动回 idle
+            effectLockUntil = Long.MAX_VALUE  // 不自动过期，等 setIdle
             _effectResetJob?.cancel()
-            _effectResetJob = GlobalScope.launch(Dispatchers.Main) {
-                delay(effectLockUntil - now)
-                setIdle()
-            }
+            _effectResetJob = null
+            android.util.Log.d("XiaoMoGif", "triggerEffect code=$code lock=permanent")
         }
     }
 
-    /** 回到 idle，仅在锁过期后生效 */
+    /** 回到 idle */
     fun setIdle() {
-        val now = System.currentTimeMillis()
-        if (now < effectLockUntil) {
-            android.util.Log.d("XiaoMoGif", "setIdle BLOCKED locked until=$effectLockUntil now=$now")
-            return
-        }
+        effectLockUntil = 0L
         _effectResetJob?.cancel()
         _effectResetJob = null
         _displayCode.value = "idle"

@@ -896,6 +896,7 @@ private class NativeAdapter(
     private var danmakuGlobalEnabled = true
     private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.DramaHighlight>>()
     private val triggeredSet = mutableSetOf<Int>()
+    private val interactionDanmakuSent = mutableSetOf<Int>()
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
     private val favoritedDramaIds = mutableSetOf<Int>()
@@ -966,6 +967,7 @@ private class NativeAdapter(
         var favoriteIv: ImageView,
         var isFavorited: Boolean = false,
         var favoritesLoaded: Boolean = false,
+        val playIcon: ImageView,
     ) : RecyclerView.ViewHolder(root)
 
     override fun getItemCount() = eps.size
@@ -1268,7 +1270,7 @@ private class NativeAdapter(
         }
         r.addView(emotionBtn)
 
-        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, emotionBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv)
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, emotionBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv, playIcon = playIcon)
     }
 
     override fun onBindViewHolder(
@@ -1286,6 +1288,7 @@ private class NativeAdapter(
             }
         }
         if (pos == cur) activeVh = h
+        h.playIcon.visibility = View.GONE
         h.titleTv.text = "\u7B2C${ep.episodeNum}\u96C6"
         h.speedTv.text = "${rate}x"
         // 加载计数 + 点赞状态（绑定用户 ID）
@@ -1332,7 +1335,7 @@ private class NativeAdapter(
                 h.danmakuView.post { h.danmakuView.setDanmakuData(items) }
             }
         }
-        // 加载该集高光点 → 进度条画青色标记点
+        // 加载该集高光点 → 进度条画青色标记点 + 绑定互动弹幕
         scope.launch(Dispatchers.IO) {
             try {
                 val playbackWrap = RetrofitClient.api.getPlaybackInfo(ep.episodeId)
@@ -1340,6 +1343,17 @@ private class NativeAdapter(
                 h.seekBar.post { h.seekBar.setHighlights(highlightList) }
                 highlightCache[ep.episodeId.toInt()] = highlightList
             } catch (_: Exception) {}
+        }
+        h.emotionBtn.onInteraction = { count ->
+            val activeHl = highlightCache[ep.episodeId.toInt()]?.find { hl ->
+                val p = players[pos]?.currentPosition ?: 0L
+                p in (hl.startTimeMs - hl.hintOffsetMs).toLong()..hl.endTimeMs.toLong()
+            }
+            if (activeHl != null && interactionDanmakuSent.add(activeHl.id)) {
+                val preset = getHighlightInteractionPreset(activeHl)
+                val crowd = java.text.DecimalFormat("#.#").format(kotlin.random.Random.nextDouble(1.2, 99.9))
+                sendXiaomoDanmaku(ep.episodeId, "${crowd}万人${preset.reactionText}")
+            }
         }
         // 点击 100%真实addView顺序：0=收藏 1=评论 2=点赞 3=分享
         val rg = h.rightBar as ViewGroup
@@ -1470,8 +1484,13 @@ private class NativeAdapter(
                                     }
                                 }
                                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                                    if (isPlaying) h.danmakuView.resumeDanmaku()
-                                    else h.danmakuView.pauseDanmaku()
+                                    if (isPlaying) {
+                                        h.danmakuView.resumeDanmaku()
+                                        h.playIcon.visibility = View.GONE
+                                    } else {
+                                        h.danmakuView.pauseDanmaku()
+                                        if (!this@apply.playWhenReady) h.playIcon.visibility = View.VISIBLE
+                                    }
                                 }
                             },
                         )
@@ -1544,6 +1563,7 @@ private class NativeAdapter(
                         h.emotionBtn.visibility = View.VISIBLE
                     } else if (!shouldShow && curVis != View.GONE) {
                         h.emotionBtn.visibility = View.GONE
+                        XiaoMoCore.setIdle()
                     }
                     lastP = p
                     delay(200)
@@ -1557,7 +1577,7 @@ private class NativeAdapter(
         }
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
-        h.seekBar.onSeek = { ms -> player.seekTo(ms); h.danmakuView.seekTo(ms) }
+        h.seekBar.onSeek = { ms -> player.seekTo(ms); player.playWhenReady = true; h.danmakuView.seekTo(ms) }
         h.seekBar.setPlayer(player)
         h.seekBar.onDragChange =
             { dragging ->
