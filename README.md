@@ -1,8 +1,8 @@
 # 青墨短剧 — 小墨 Agent
 
-> 青墨短剧平台 · AI 观剧助手 · AI 全栈比赛项目
+> 青墨短剧平台 · AI 观剧助手 · 2026 AI 全栈比赛项目
 
-「小墨」是青墨短剧平台的 AI 观剧助手，以拟人化角色形象常驻播放界面侧边，在高光时刻主动触发互动，提供情绪陪伴，并承担短剧资源检索和用户信息管理的 Agent 职责。
+「小墨」是青墨短剧平台的 AI 观剧助手，以拟人化 GIF 形象常驻播放界面，在高光时刻主动触发互动（情绪按钮/二选一面板/反应面板），播放间隙发送个性化弹幕陪伴，并通过 RAG 检索真实剧情数据回答用户关于角色、情节的问题。
 
 ---
 
@@ -10,11 +10,11 @@
 
 | 层次 | 技术 |
 |------|------|
-| 客户端 | Kotlin · Jetpack Compose · ExoPlayer (Media3 1.2.1) · ViewPager2 · Retrofit 2.9.0 |
-| 服务端 | Python 3.11+ · FastAPI 0.115.0 · Uvicorn · SQLite |
-| AI 模型 | Doubao-Seed-2.0-lite (火山引擎 Ark) · `volcenginesdkarkruntime` |
-| 数据层 | SQLite (`ju_flash.db`) · `pydantic-settings` |
-| 工具链 | Playwright · ktlint 1.3.1 · Gradle 8.7 |
+| 客户端 | Kotlin · Jetpack Compose · ExoPlayer (Media3) · ViewPager2 · Retrofit · Coil |
+| 服务端 | Python 3.11 · FastAPI · Uvicorn · SQLite |
+| AI 模型 | Doubao-Seed-2.0-lite (火山引擎 Ark · OpenAI 兼容接口) |
+| 数据层 | SQLite (`ju_flash.db`) · 15 张生产表 · 全量真实数据 |
+| 工具链 | ktlint · Gradle 8.7 |
 
 ---
 
@@ -22,42 +22,35 @@
 
 ```
 Qingmo/
-├── android/                      # Android 客户端
-│   ├── app/
-│   │   ├── src/main/
-│   │   │   ├── java/com/qingmo/app/
-│   │   │   │   ├── MainActivity.kt          # 单 Activity 入口
-│   │   │   │   ├── data/                    # 数据层
-│   │   │   │   │   ├── api/                 # Retrofit API 接口
-│   │   │   │   │   ├── model/               # 数据模型
-│   │   │   │   │   ├── repository/          # 数据仓库
-│   │   │   │   │   └── ProgressCache.kt     # 播放进度缓存
-│   │   │   │   └── ui/                      # UI 层
-│   │   │   │       ├── navigation/          # 导航图
-│   │   │   │       ├── screens/             # 列表 / 详情 / 播放器 三页面
-│   │   │   │       └── theme/               # 青白主题色板 + 字体
-│   │   │   └── res/xml/network_security_config.xml
-│   │   └── build.gradle.kts
-│   └── build.gradle.kts
-├── backend/                      # Python 服务端
-│   ├── main.py                   # FastAPI 入口
-│   ├── init_db.py                # 数据库初始化与种子数据
+├── android/                         # Android 客户端
+│   └── app/src/main/java/com/qingmo/app/
+│       ├── MainActivity.kt          # 单 Activity 入口
+│       ├── data/                    # 数据层 (API/Model/Repository/Auth/Progress)
+│       ├── ui/                      # UI (导航/列表/详情/播放器/登录/个人中心)
+│       ├── xiaomo/                  # 小墨 Agent 核心
+│       │   ├── XiaoMoCore.kt        # 状态机 + GIF 调度
+│       │   ├── XiaoMoSettings.kt    # 功能开关持久化
+│       │   ├── InteractionButton.kt # 高光互动按钮 (PNG 动画)
+│       │   ├── ModuleRegistry.kt    # 互动模块注册中心
+│       │   ├── modules/             # 互动模块 (Emotion/Choice/Vote/Reaction)
+│       │   ├── companion/           # 小墨面板组件
+│       │   └── ui/                  # 聊天面板/设置
+│       └── res/
+│           └── drawable/xiaomo/     # 11 种高光类型 GIF/MOV 动画
+├── backend/                         # Python 服务端
+│   ├── main.py                      # FastAPI 入口 + 静态文件挂载
 │   ├── requirements.txt
-│   ├── .env                      # 环境变量（不纳入版本控制）
-│   ├── .env.example              # 环境变量模板
 │   ├── app/
-│   │   ├── config.py             # Pydantic Settings 配置
-│   │   ├── database.py           # SQLite 连接 + 建表 + 迁移
-│   │   ├── schemas.py            # Pydantic 数据模型
-│   │   ├── api/router.py         # REST API 路由
-│   │   └── services/llm_service.py  # Doubao LLM 服务
-│   └── crawler/                  # 短剧资源爬虫
-│       └── data/
-│           ├── covers/           # 10 张封面图
-│           └── videos/           # 232 集视频文件
-└── docs/                         # 项目文档
-    ├── 青墨短剧_小墨Agent_PRD_V1.0.md
-    └── 青墨短剧_小墨Agent_20260521-0610开发排期_V1.0.md
+│   │   ├── api/router.py            # REST API (1650+ 行)
+│   │   ├── database.py              # SQLite 建表 + 迁移
+│   │   ├── schemas.py               # Pydantic 模型
+│   │   └── services/llm_service.py  # LLM + RAG 五层检索
+│   └── crawler/data/
+│       ├── covers/                  # 10 张封面
+│       └── videos/                  # 232 集 MP4
+├── data/analysis/                   # 逐集 AI 分析 JSON
+├── docs/                            # 项目文档
+└── tools/                           # 视频分析/数据迁移/清理脚本
 ```
 
 ---
@@ -66,67 +59,113 @@ Qingmo/
 
 ### 环境要求
 
-- **服务端**：Python 3.11+、pip
-- **客户端**：Android Studio Hedgehog+、JDK 11、Gradle 8.7+
-- **数据库**：无需安装，SQLite 内嵌
+- 服务端：Python 3.11+、pip
+- 客户端：Android Studio、JDK 11、Gradle 8.7+
+- 数据库：SQLite（零配置，文件即数据库）
 
 ### 1. 启动后端
 
 ```bash
 cd backend
-
-# 安装依赖
 pip install -r requirements.txt
-
-# 配置环境变量（复制模板后修改）
-cp .env.example .env
-# 编辑 .env 填入真实的 DOUBAO_API_KEY
-
-# 初始化数据库（10 部短剧 + 高光点种子数据）
-python init_db.py
-
-# 启动服务
-python main.py
-# 服务运行在 http://127.0.0.1:8000
-# API 文档自动生成：http://127.0.0.1:8000/docs
+cp .env.example .env    # 填入 DOUBAO_API_KEY
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+# http://127.0.0.1:8000/docs 自动生成 API 文档
 ```
 
-### 2. 启动 Android 客户端
+### 2. 编译 Android
 
 ```bash
 cd android
-
-# 用 Android Studio 打开项目
-# 或命令行编译
+# 手机 WiFi 热点模式调试：在 local.properties 添加
+# qingmo.apiBaseUrl=http://192.168.43.69:8000/
 gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-
-- 包名：`com.qingmo.app`
-- 最低 SDK：26 (Android 8.0)
-- 目标 SDK：34 (Android 14)
-
-### 3. 端到端验证
-
-1. 启动后端 `python main.py`
-2. Android 模拟器运行 App
-3. `http://127.0.0.1:8000/docs` 手动测试接口
-4. 列表中应显示 10 部短剧，点击进入播放页
 
 ---
 
 ## 核心功能
 
-| 模块 | 功能 | 当前状态 |
-|------|------|---------|
-| 短剧列表 | 网格展示、标签筛选、封面加载 | ✅ 已完成 |
-| 短剧详情 | 封面、简介展开、选集网格 | ✅ 已完成 |
-| 视频播放器 | ViewPager2 切剧、SeekBar 拖拽、倍速选择、选集面板 | ✅ 已完成 |
-| 播放进度 | 内存缓存、续播恢复、自动切集 | ✅ 已完成 |
-| 高光点数据 | 数据库存储、API 下发、类型标注 | ✅ 已完成 |
-| 小墨 Agent | Peek/Expanded 状态机、模块注册中心 | ⌛ 排期中 |
-| 高光互动 | 情绪弹幕、剧情投票、AI 问答模块 | ⌛ 排期中 |
-| AI 续写 | 剧集结尾 LLM 剧情续写 | ⌛ 排期中 |
-| 对话引擎 | 意图识别、短剧检索、用户画像 | ⌛ 排期中 |
+| 模块 | 功能 | 状态 |
+|------|------|:--:|
+| 短剧列表 | 2 列网格、胶囊搜索、封面加载、下拉刷新 | ✅ |
+| 视频播放 | ViewPager2 切集、SeekBar 拖拽高光标记、倍速 | ✅ |
+| 弹幕系统 | 5 轨道飘屏、发送/暂停/开关、小墨弹幕独立通道 | ✅ |
+| 评论系统 | 楼中楼平级嵌套、@小墨 AI 回复、点赞 | ✅ |
+| 点赞收藏 | toggle API + 乐观更新 + 计数同步 | ✅ |
+| **高光互动** | 情绪按钮 / 二选一面板 / 反应面板，纯 View 零 Compose | ✅ |
+| **小墨 Agent** | 全局悬浮常驻、流式对话、RAG 五层检索、多会话持久化 | ✅ |
+| **角色对话** | 选人 → 1v1 人设聊天、LLM 角色口吻、本地降级 | ✅ |
+| 用户系统 | JWT 注册/登录、匿名设备兼容、12 表数据合并 | ✅ |
+| 个人中心 | 观看历史、收藏列表、昵称编辑、进度概览 | ✅ |
+| 搜索 | 胶囊搜索框，剧名/标签实时过滤 | ✅ |
+| 小墨 GIF | 11 种高光动效、进入/离开区间自动切换 idle | ✅ |
+| 分支视频 | 二选一 → 分支播放 → 结束返回 → 续播原位 | ✅ |
+
+---
+
+## AI / 大模型能力
+
+### 模型选型
+
+| 用途 | 模型 | 调用方式 |
+|------|------|------|
+| **小墨 Agent 对话** | Doubao-Seed-2.0-lite | OpenAI 兼容接口 (Ark API) |
+| **角色人设聊天** | Doubao-Seed-2.0-lite | OpenAI 兼容接口 |
+| **高光点/摘要生成** | Doubao-Seed-2.0-lite | OpenAI 兼容接口 + JSON Mode |
+| **多模态视频分析** | Doubao-Seed-2.0-lite | 音频转文字 (ASR) + 关键帧 + LLM 综合 |
+| **视频生成** | 小云雀 (xyq) | 技能插件调用 |
+| **开发辅助** | Trae · Qwen Code · DeepSeek V4 | IDE 插件 + CLI Agent |
+
+### 调用架构
+
+```
+Android (OkHttp 流式) ──→ FastAPI ──→ Doubao Ark (OpenAI 兼容)
+                                          │
+                              POST /api/v1/agent/chat (流式)
+                              POST /api/v1/characters/{id}/chat
+                              POST /api/v1/agent/story-extension
+```
+
+- **base_url**: `https://ark.cn-beijing.volces.com/api/v3`
+- **model**: EP ID (`ep-20260514111117-s7m8b`)
+- **SDK**: `openai.AsyncOpenAI`（非 `volcenginesdkarkruntime`）
+- 流式对话**不用** `async with`，非流式**必须用** `async with` 关闭连接
+- LLM 调用统一 60s 超时，角色对话 15s 超时并配有本地降级回复
+
+### Prompt 设计
+
+小墨 Agent 对话采用**分层 Prompt 注入**：
+
+1. **System Prompt**: 角色设定（活泼可爱、追剧上头）、禁止输出链接
+2. **页面上下文**: 当前观看的剧集、播放进度（由 Android `dramaContext` 传入）
+3. **RAG 检索结果**: 五层关键词检索（角色 → 事件 → 弹幕 → 高光 → 摘要），注入为 system message，强制 LLM 基于真实数据回答
+4. **用户消息**: 原始输入，最短路径进入 LLM
+
+意图路由为纯关键词匹配（零 LLM 依赖）：
+- `search_drama`：找剧/推荐 → SQL 模糊搜索 → LLM 润色推荐文案
+- `user_profile`：我的记录 → DB 聚合统计
+- `llm_chat`：聊剧情 → RAG 增强 LLM 对话
+
+### RAG 五层检索
+
+```
+用户提问 "那个男主反水的情节"
+  → 1. drama_characters (角色名匹配)
+  → 2. drama_timeline (事件关键词匹配)
+  → 3. danmaku (观众弹幕热议匹配)
+  → 4. drama_highlight (高光标题匹配)
+  → 5. drama_summaries (摘要兜底)
+  ⇒ 合并注入 LLM context
+```
+
+### 内容审核与降级
+
+- 豆包对盗墓、志怪类题材存在静默拦截（不报错、不返回）
+- 已为角色对话添加**本地降级回复池**（随机模板话术）
+- 批量 LLM 任务中每剧独立 try/catch，单剧失败不阻塞其他剧
+- 高光点目前走手工编排种子数据，LLM 生成通过 `POST /admin/highlights` 管理接口写入
 
 ---
 
@@ -134,44 +173,55 @@ gradlew assembleDebug
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/health` | 健康检查（含 LLM 可用性） |
 | GET | `/api/v1/dramas` | 短剧列表 |
-| GET | `/api/v1/dramas/{drama_id}` | 短剧详情（含剧集） |
-| GET | `/api/v1/playback/{episode_id}` | 播放信息（含高光点） |
+| GET | `/api/v1/dramas/{id}` | 短剧详情 |
+| GET | `/api/v1/playback/{episode_id}` | 播放信息 + 高光点 |
 | POST | `/api/v1/progress` | 上报播放进度 |
-| POST | `/api/v1/agent/chat` | 小墨 Agent 流式对话 |
-| POST | `/api/v1/agent/story-extension` | AI 剧情续写 |
-| POST | `/api/v1/agent/generate-highlights` | 智能生成高光点 |
-| POST | `/api/v1/interactions` | 上报用户互动数据 |
+| GET/POST | `/api/v1/danmaku/{episode_id}` | 弹幕拉取/发送 |
+| GET/POST | `/api/v1/episodes/{id}/comments` | 评论列表/发表 |
+| POST | `/api/v1/episodes/{id}/like` | 点赞 toggle |
+| POST | `/api/v1/dramas/{id}/favorite` | 收藏 toggle |
+| POST | `/api/v1/agent/chat` | 小墨流式对话 (RAG) |
+| GET/POST/DELETE | `/api/v1/agent/sessions` | 对话会话 CRUD |
+| GET/POST | `/api/v1/characters/{id}/chat` | 角色对话 |
+| GET/POST | `/api/v1/highlights/{id}/vote` | 剧情投票 |
+| GET/POST | `/api/v1/dramas/{id}/branch-vote` | 分支投票 |
+| POST | `/api/v1/interactions` | 互动上报 |
+| POST | `/api/v1/auth/register` | 注册 |
+| POST | `/api/v1/auth/login` | 登录 |
 
 ---
 
-## 数据库表
+## 数据库
 
-| 表 | 说明 | 行数 |
-|---|---|---|
-| `dramas` | 短剧元数据 | 10 |
-| `drama_tags` | 短剧标签（多值） | ~30 |
-| `episodes` | 剧集信息 | ~500 |
-| `highlights` | 高光时刻 | ~1000 |
-| `user_progress` | 播放进度 | 按用户 |
-| `user_interactions` | 用户互动记录 | 按用户 |
-| `user_profiles` | 用户画像 | 按用户 |
+| 表 | 说明 |
+|---|---|
+| `dramas` | 10 部短剧，/ 分隔标签 |
+| `episodes` | 232 集，100% 真实 MP4 |
+| `danmaku` | 17.6 万条弹幕 |
+| `drama_highlight` | 高光点 (support/reaction/choice) |
+| `highlight_choices` | 二选一配置独立表 |
+| `episode_comments` | 评论 (平级嵌套) |
+| `episode_likes` | 点赞 |
+| `user_favorites` | 收藏 |
+| `user_progress` | 播放进度实时上报 |
+| `drama_summaries` | 每集 AI 剧情摘要 (RAG) |
+| `drama_characters` | 角色人设 (RAG) |
+| `drama_timeline` | 事件时间线 (RAG) |
+| `user_chat_sessions` | 小墨对话会话 |
+| `user_chat_messages` | 对话消息持久化 |
+| `users` | 用户认证 |
+
+共 15 张生产表，零 mock 数据。
 
 ---
 
-## 文档索引
+## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [PRD V1.0](docs/青墨短剧_小墨Agent_PRD_V1.0.md) | 产品需求文档（1049 行） |
-| [开发排期](docs/青墨短剧_小墨Agent_20260521-0610开发排期_V1.0.md) | 21 天开发计划（6.11 交付） |
-| [架构文档](docs/ARCHITECTURE.md) | 系统架构、数据流、组件关系 |
-| [接口文档](docs/API.md) | 完整 API 参考 |
-| [数据库设计](docs/DATABASE.md) | 表结构、迁移策略 |
-
----
-
-## 许可
-
-内部比赛项目，非开源。
+| [PRD](docs/青墨短剧_小墨Agent_PRD_V1.0.md) | 产品需求文档 |
+| [架构](docs/ARCHITECTURE.md) | 系统架构 + 数据流 |
+| [API](docs/API.md) | 完整接口参考 |
+| [数据库](docs/DATABASE.md) | 表结构 + 迁移策略 |
+| [排期](docs/青墨短剧_小墨Agent_20260521-0610开发排期_V1.0.md) | 21 天开发计划 |
