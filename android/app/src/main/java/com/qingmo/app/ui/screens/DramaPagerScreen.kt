@@ -1160,6 +1160,7 @@ private class NativeAdapter(
         var isFavorited: Boolean = false,
         var favoritesLoaded: Boolean = false,
         val playIcon: ImageView,
+        val videoErrorTv: TextView,
     ) : RecyclerView.ViewHolder(root)
 
     override fun getItemCount() = eps.size
@@ -1461,8 +1462,17 @@ private class NativeAdapter(
                 }
         }
         r.addView(emotionBtn)
+        val videoErrorTv = TextView(c).apply {
+            visibility = View.GONE
+            text = "视频资源缺失"
+            setTextColor(C_WHITE70)
+            textSize = 16f
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(-1, -1, Gravity.CENTER)
+        }
+        r.addView(videoErrorTv)
 
-        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, emotionBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv, playIcon = playIcon)
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, emotionBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv, playIcon = playIcon, videoErrorTv = videoErrorTv)
     }
 
     override fun onBindViewHolder(
@@ -1684,6 +1694,10 @@ private class NativeAdapter(
                                         h.danmakuView.pauseDanmaku()
                                         if (!this@apply.playWhenReady) h.playIcon.visibility = View.VISIBLE
                                     }
+                                }
+                                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                                    h.videoErrorTv.visibility = View.VISIBLE
+                                    h.pv.visibility = View.INVISIBLE
                                 }
                             },
                         )
