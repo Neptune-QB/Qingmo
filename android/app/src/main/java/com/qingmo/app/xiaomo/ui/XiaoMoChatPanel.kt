@@ -464,15 +464,14 @@ private fun ChatBubble(
         if (!isUser) {
             coil.compose.AsyncImage(
                 model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                    .data(com.qingmo.app.R.drawable.xiaomo_chat)
+                    .data("file:///android_asset/xiaomo_avatar.png")
                     .crossfade(true)
                     .build(),
                 contentDescription = "小墨",
                 modifier = Modifier
-                    .size(32.dp)
-                    .padding(top = 8.dp)
-                    .clip(CircleShape),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    .size(36.dp)
+                    .padding(top = 8.dp),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             )
             Spacer(Modifier.width(8.dp))
         }

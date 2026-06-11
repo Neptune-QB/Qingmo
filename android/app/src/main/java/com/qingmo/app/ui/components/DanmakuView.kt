@@ -6,13 +6,18 @@ import android.animation.ObjectAnimator
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.random.Random
 
@@ -22,6 +27,7 @@ data class DanmakuItem(
     val timeSec: Float = 0f,
     val color: Int = Color.WHITE,
     val userId: String = "",
+    val interactionType: String = "",
 )
 
 class DanmakuView @JvmOverloads constructor(
@@ -49,7 +55,15 @@ class DanmakuView @JvmOverloads constructor(
     private val TIMEWINDOW_MS = 500L
     private val pendingDanmaku = mutableListOf<DanmakuItem>()
     private val triggeredIds = mutableSetOf<Long>()
+    private val sentXiaomoTexts = mutableSetOf<String>()
     private var lastKnownWidth = 0
+
+    // 小墨头像缓存
+    private val xiaomoAvatar by lazy {
+        try {
+            context.assets.open("xiaomo_avatar.png").use { BitmapFactory.decodeStream(it) }
+        } catch (_: Exception) { null }
+    }
 
     fun setDanmakuEnabled(enabled: Boolean) {
         val prevEnabled = this.enabled
@@ -94,8 +108,9 @@ class DanmakuView @JvmOverloads constructor(
         }
     }
 
-    /** 自己发的弹幕：立即追加，不排队、不取消正在飘的、不触发去重检查 */
+    /** 自己发的弹幕或小墨弹幕：立即追加，小墨弹幕文本级去重 */
     fun forceEmitDanmaku(item: DanmakuItem) {
+        if (item.userId == "xiaomo_agent" && !sentXiaomoTexts.add(item.text)) return
         val processedItem = if (item.text.length > 32) item.copy(text = truncateText(item.text, 30) + "…") else item
         pendingDanmaku.add(processedItem)
         triggeredIds.add(processedItem.id)
@@ -126,6 +141,7 @@ class DanmakuView @JvmOverloads constructor(
         laneOccupiedUntil.fill(0)
         pendingDanmaku.clear()
         triggeredIds.clear()
+        sentXiaomoTexts.clear()
     }
 
     fun pauseDanmaku() {
@@ -181,19 +197,24 @@ class DanmakuView @JvmOverloads constructor(
 
         val textColor = item.color or 0xFF000000.toInt()
         val isOwn = currentUserId.isNotEmpty() && item.userId == currentUserId
-        val tv = TextView(context).apply {
-            text = item.text
-            setTextColor(textColor)
-            textSize = 14f
-            setShadowLayer(1f, 0f, 0f, Color.BLACK)
-            if (isOwn) {
-                // 自己发的弹幕：白色圆角边框 + 半透明白色底色
-                background = GradientDrawable().apply {
-                    setColor(0x33FFFFFF.toInt())
-                    cornerRadius = 12f * density
-                    setStroke((1.5f * density).toInt(), Color.WHITE)
+        val isXiaoMo = item.userId == "xiaomo_agent"
+
+        val bubbleView: View = if (isXiaoMo) {
+            createXiaoMoBubble(item)
+        } else {
+            TextView(context).apply {
+                text = item.text
+                setTextColor(textColor)
+                textSize = 14f
+                setShadowLayer(1f, 0f, 0f, Color.BLACK)
+                if (isOwn) {
+                    background = GradientDrawable().apply {
+                        setColor(0x33FFFFFF.toInt())
+                        cornerRadius = 12f * density
+                        setStroke((1.5f * density).toInt(), Color.WHITE)
+                    }
+                    setPadding(dp2px(8f), dp2px(4f), dp2px(8f), dp2px(4f))
                 }
-                setPadding(dp2px(8f), dp2px(4f), dp2px(8f), dp2px(4f))
             }
         }
 
@@ -206,32 +227,32 @@ class DanmakuView @JvmOverloads constructor(
             topMargin = lanePx
             leftMargin = safePaddingPx
         }
-        addView(tv, lp)
+        addView(bubbleView, lp)
 
-        tv.measure(
+        bubbleView.measure(
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
         )
-        val textW = tv.measuredWidth
+        val textW = bubbleView.measuredWidth
         val totalDist = (usableWidth + textW).toFloat()
         val duration = speedMin + (speedMax - speedMin) * Random.nextFloat()
         val scaledDuration = (duration * totalDist / usableWidth).toLong()
 
         val startX = viewWidth.toFloat()
         val endX = -textW.toFloat()
-        tv.translationX = startX
+        bubbleView.translationX = startX
 
-        ObjectAnimator.ofFloat(tv, "translationX", startX, endX).apply {
+        ObjectAnimator.ofFloat(bubbleView, "translationX", startX, endX).apply {
             this.duration = scaledDuration
             interpolator = LinearInterpolator()
             startDelay = waitMs
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
-                    removeView(tv)
+                    removeView(bubbleView)
                     activeAnimators.remove(animation)
                 }
                 override fun onAnimationCancel(animation: Animator) {
-                    removeView(tv)
+                    removeView(bubbleView)
                     activeAnimators.remove(animation)
                 }
             })
@@ -259,6 +280,107 @@ class DanmakuView @JvmOverloads constructor(
     }
 
     private fun dp2px(dp: Float): Int = (dp * density + 0.5f).toInt()
+
+    /**
+     * 创建小墨专属弹幕胶囊框：
+     * [头像 22dp] [小墨] [正文]  — 深色半透胶囊 + 白描边 + 阴影
+     */
+    private fun createXiaoMoBubble(item: DanmakuItem): View {
+        val isHighlight = item.interactionType.isNotEmpty()
+        val enhanced = isHighlight
+
+        // 背景
+        val bg = GradientDrawable().apply {
+            setColor(0xB7080C0E.toInt()) // rgba(8,12,14,0.72)
+            cornerRadius = 999f * density
+            val borderColor = if (enhanced) 0xA600D2CD.toInt() else 0x47FFFFFF.toInt()
+            setStroke(dp2px(1f), borderColor)
+        }
+
+        // 直接用 FrameLayout + 背景 + elevation
+        val bubble = FrameLayout(context).apply {
+            background = bg
+            elevation = dp2px(4f).toFloat()
+            clipToPadding = false
+            clipChildren = false
+        }
+
+        // 内容横向布局
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp2px(8f), dp2px(6f), dp2px(12f), dp2px(6f))
+        }
+
+        // 头像
+        val avatarBmp = xiaomoAvatar
+        if (avatarBmp != null) {
+            val avatar = ImageView(context).apply {
+                setImageBitmap(avatarBmp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                layoutParams = LinearLayout.LayoutParams(dp2px(22f), dp2px(22f)).apply {
+                    setMargins(0, 0, dp2px(6f), 0)
+                }
+                // 圆形裁切（通过 clipToOutline + CircleShape 或直接用 background circle）
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setSize(dp2px(22f), dp2px(22f))
+                }
+                clipToOutline = true
+            }
+            content.addView(avatar)
+        }
+
+        // "小墨" 标签
+        val label = TextView(context).apply {
+            text = "小墨"
+            setTextColor(0xFF00D2CD.toInt())
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                setMargins(0, 0, dp2px(6f), 0)
+            }
+        }
+        content.addView(label)
+
+        // 正文（移除 "小墨: " 前缀）
+        val displayText = item.text.removePrefix("小墨: ").removePrefix("小墨:")
+        val body = TextView(context).apply {
+            text = displayText
+            setTextColor(Color.WHITE)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+            setShadowLayer(1f, 0f, 0f, 0x66000000.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        content.addView(body)
+
+        bubble.addView(
+            content,
+            FrameLayout.LayoutParams(-2, dp2px(36f)).apply {
+                gravity = Gravity.CENTER_VERTICAL
+            },
+        )
+
+        // 高光弹入动画
+        if (enhanced) {
+            bubble.scaleX = 0.92f
+            bubble.scaleY = 0.92f
+            bubble.alpha = 0f
+            bubble.animate()
+                .scaleX(1.04f).scaleY(1.04f).alpha(1f)
+                .setDuration(120)
+                .withEndAction {
+                    bubble.animate()
+                        .scaleX(1f).scaleY(1f)
+                        .setDuration(60)
+                        .start()
+                }
+                .start()
+        }
+
+        return bubble
+    }
 
     companion object {
         // 断句标点：在这些位置自然截断，不会切在词语中间

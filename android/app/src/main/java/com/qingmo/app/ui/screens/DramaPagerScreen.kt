@@ -109,6 +109,8 @@ import com.qingmo.app.ui.theme.PlayerAccent
 import com.qingmo.app.ui.theme.Primary
 import com.qingmo.app.ui.theme.SurfaceVariant
 import com.qingmo.app.xiaomo.XiaoMoCore
+import com.qingmo.app.xiaomo.InteractionButton
+import com.qingmo.app.xiaomo.getHighlightInteractionPreset
 import com.qingmo.app.xiaomo.ui.XiaoMoPanelView
 import com.qingmo.app.xiaomo.ui.XiaoMoPeekView
 import com.qingmo.app.xiaomo.ui.XiaoMoChatPanel
@@ -894,8 +896,6 @@ private class NativeAdapter(
     private var danmakuGlobalEnabled = true
     private val highlightCache = mutableMapOf<Int, List<com.qingmo.app.data.model.DramaHighlight>>()
     private val triggeredSet = mutableSetOf<Int>()
-    var onActiveHighlightChanged: ((com.qingmo.app.data.model.DramaHighlight?) -> Unit)? = null
-    private var lastActiveHlId: Int? = null
     private var consecutiveCount = 1
     private var lastWatchedDramaId: Long = 0
     private val favoritedDramaIds = mutableSetOf<Int>()
@@ -949,6 +949,7 @@ private class NativeAdapter(
         val speedTv: TextView,
         val descTv: TextView,
         val danmakuBtn: ImageView,
+        val emotionBtn: InteractionButton,
         val seekBar: SeekBar,
         val timeLabel: TextView,
         val peekLabel: TextView,
@@ -978,6 +979,8 @@ private class NativeAdapter(
             FrameLayout(c).apply {
                 layoutParams = ViewGroup.LayoutParams(-1, -1)
                 setBackgroundColor(C_BLACK)
+                clipChildren = false
+                clipToPadding = false
             }
         val pv =
             PlayerView(c).apply {
@@ -1253,7 +1256,19 @@ private class NativeAdapter(
                 layoutParams = LinearLayout.LayoutParams(dp(28f), dp(28f))
             }
         bottomBar.addView(fsBtn)
-        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv)
+
+        // 高光互动按钮：根据高光类型动态切换图标，位于"弹"按钮上方
+        val emotionBtn = InteractionButton(c, r, "thrill").apply {
+            visibility = View.GONE
+            elevation = dp(10f).toFloat()
+            layoutParams =
+                FrameLayout.LayoutParams(dp(80f), dp(80f), Gravity.BOTTOM or Gravity.START).apply {
+                    setMargins(dp(16f), 0, 0, dp(177f))
+                }
+        }
+        r.addView(emotionBtn)
+
+        return VH(r, pv, danmakuView, titleTv, speedTv, descTv, danmakuBtn, emotionBtn, seekBar, timeLabel, peekLabel, tb, rb, bi, likeLabel, commentLabel, favoriteLabel, likeIv, favoriteIv = favoriteIv)
     }
 
     override fun onBindViewHolder(
@@ -1475,16 +1490,18 @@ private class NativeAdapter(
             scope.launch {
                 var last = 0L
                 var lastP = 0L
-                val epHighlights = highlightCache[ep.episodeId.toInt()] ?: emptyList()
+                fun getHighlights(): List<com.qingmo.app.data.model.DramaHighlight> =
+                    highlightCache[ep.episodeId.toInt()] ?: emptyList()
                 while (true) {
                     val p = player.currentPosition
+                    val isActive = pos == cur
                     if (player.isPlaying) {
                         if (p - last >= 2000) {
                             ProgressCache.save(ep.episodeId, p)
                             last = p
                         }
                         // 高光点自动检测：播放进度到达高光点 ±3s 内自动触发
-                        for (hl in epHighlights) {
+                        for (hl in getHighlights()) {
                             val hlMs = hl.startTimeMs.toLong()
                             if (kotlin.math.abs(p - hlMs) < 3000 && triggeredSet.add(hl.id)) {
                                 /* DISABLED: auto trigger
@@ -1502,22 +1519,31 @@ private class NativeAdapter(
                     }
                     h.danmakuView.updatePlaybackTime(p)
                     h.seekBar.updatePlaybackTime(p)
-                    // GIF 硬切换 + 互动面板：只响应正向进入的高光点
-                    val activeHL = epHighlights.find { p in it.startTimeMs.toLong()..it.endTimeMs.toLong() }
-                    if (activeHL?.id != lastActiveHlId) {
-                        val forwardEnter = activeHL != null && lastP < activeHL.startTimeMs
-                        lastActiveHlId = activeHL?.id
-                        if (forwardEnter && activeHL.xiaomoGifCode.isNotEmpty()) {
-                            XiaoMoCore.triggerEffect(activeHL.xiaomoGifCode)
-                            if (com.qingmo.app.xiaomo.XiaoMoSettings.isEnabled("highlight_bubble")) {
-                                val text = activeHL.bubbleText.ifEmpty { activeHL.title }
-                                if (text.isNotEmpty()) {
-                                    sendXiaomoDanmaku(ep.episodeId, text)
-                                }
-                            }
-                        } else if (activeHL == null) {
-                            XiaoMoCore.dismissHint()
+
+                    val hls = getHighlights()
+                    val activeHL = hls.find { p in (it.startTimeMs - it.hintOffsetMs).toLong()..it.endTimeMs.toLong() }
+
+                    // GIF（正向进入时触发一次）
+                    if (isActive && activeHL != null && activeHL.xiaomoGifCode.isNotEmpty() && lastP < activeHL.startTimeMs) {
+                        XiaoMoCore.triggerEffect(activeHL.xiaomoGifCode)
+                        val text = activeHL.bubbleText.ifEmpty { activeHL.title }
+                        if (text.isNotEmpty()) {
+                            sendXiaomoDanmaku(ep.episodeId, text, interactionType = activeHL.highlightType)
                         }
+                    }
+
+                    // 按钮：在高光区间内就显示，离开就隐藏
+                    val shouldShow = isActive && activeHL != null && !isFullscreen
+                    val curVis = h.emotionBtn.visibility
+                    Log.d("DramaPager", "BTN: isActive=$isActive pos=$pos cur=$cur hl=${activeHL?.id} hlType=${activeHL?.highlightType} shouldShow=$shouldShow p=$p hlsSz=${hls.size}")
+                    if (shouldShow && curVis != View.VISIBLE) {
+                        val preset = getHighlightInteractionPreset(activeHL)
+                        if (activeHL.highlightType.isNotEmpty()) {
+                            h.emotionBtn.setInteractionKey(preset.interactionKey)
+                        }
+                        h.emotionBtn.visibility = View.VISIBLE
+                    } else if (!shouldShow && curVis != View.GONE) {
+                        h.emotionBtn.visibility = View.GONE
                     }
                     lastP = p
                     delay(200)
@@ -1545,8 +1571,9 @@ private class NativeAdapter(
                     }
                 ; h.topBar.visibility = vis
                 h.rightBar.visibility = vis
-                h.bottomInfo.visibility =
-                    vis
+                h.bottomInfo.visibility = vis
+                // 高光按钮随拖拽暂时隐藏
+                if (dragging) h.emotionBtn.visibility = View.INVISIBLE
                 viewPager2?.requestDisallowInterceptTouchEvent(dragging)
             }
         applyFullscreenToVh(h)
@@ -1557,6 +1584,8 @@ private class NativeAdapter(
         vh.topBar.visibility = vis
         vh.rightBar.visibility = vis
         vh.bottomInfo.visibility = vis
+        // 高光按钮随全屏暂时隐藏
+        if (isFullscreen) vh.emotionBtn.visibility = View.INVISIBLE
         val bb = vh.root.getChildAt(vh.root.childCount - 1) as? LinearLayout
         val fb = bb?.getChildAt(2) as? ImageView
         fb?.setImageResource(
@@ -1613,7 +1642,7 @@ private class NativeAdapter(
     // ===== 小墨互动增强 =====
     private val xiaomoGraphite = 0xFF3D5A3E.toInt()
 
-    private fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0) {
+    private fun sendXiaomoDanmaku(episodeId: Long, text: String, delayMs: Long = 0, interactionType: String = "") {
         val nowMs = activePlayer?.currentPosition ?: 0L
         val item = DanmakuItem(
             id = System.currentTimeMillis(),
@@ -1621,6 +1650,7 @@ private class NativeAdapter(
             timeSec = nowMs / 1000f,
             color = xiaomoGraphite,
             userId = "xiaomo_agent",
+            interactionType = interactionType,
         )
         if (delayMs > 0) {
             scope.launch {
@@ -1662,6 +1692,8 @@ private class NativeAdapter(
         activePlayer?.setPlaybackSpeed(rate)
         val sp = ProgressCache.get(eps[pos].episodeId)
         activePlayer?.seekTo(sp)
+        // 切换剧集时重置高光互动状态
+        triggeredSet.clear()
         // Find ViewHolder for new position (may have been prefetched before onBindViewHolder set activeVh)
         val vh = viewHolders.get(pos)
         if (vh != null) activeVh = vh
