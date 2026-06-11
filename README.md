@@ -74,6 +74,7 @@ Qingmo/
 - 服务端：Python 3.11+、pip
 - 客户端：Android Studio、JDK 11、Gradle 8.7+
 - 数据库：SQLite（零配置，文件即数据库）
+- 默认用户：`test` / `123456`（可直接登录，也可注册新账号）
 
 ### 1. 启动后端
 
