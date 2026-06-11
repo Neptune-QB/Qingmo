@@ -12,7 +12,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    val BASE_URL: String = BuildConfig.API_BASE_URL
+    val BASE_URL: String = BuildConfig.API_BASE_URL.trim()
 
     /** 鉴权拦截器：自动为所有请求添加 Bearer Token */
     private val authInterceptor = Interceptor { chain ->
