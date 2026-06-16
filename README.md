@@ -82,7 +82,7 @@ Qingmo/
 cd backend
 pip install -r requirements.txt
 cp .env.example .env    # 填入 LLM 配置（见下方）
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 # http://127.0.0.1:8000/docs 自动生成 API 文档
 ```
 
