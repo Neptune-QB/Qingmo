@@ -21,12 +21,13 @@ object TokenManager {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    fun saveAuth(token: String, userId: Int, username: String, nickname: String) {
+    fun saveAuth(token: String, userId: Int, username: String, nickname: String, avatar: String = "") {
         prefs?.edit()?.apply {
             putString(KEY_TOKEN, token)
             putInt(KEY_USER_ID, userId)
             putString(KEY_USERNAME, username)
             putString(KEY_NICKNAME, nickname)
+            if (avatar.isNotEmpty()) putString(KEY_AVATAR, avatar)
             apply()
         }
     }

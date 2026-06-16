@@ -79,7 +79,7 @@ def login(req: LoginRequest):
     """用户登录"""
     result = login_user(req.username, req.password)
     if not result["ok"]:
-        raise HTTPException(status_code=401, detail=result["error"])
+        return result  # 返回 200 + ok:false，让客户端直接解析 error 字段
     # 登录时合并设备数据
     if req.device_id:
         merge_device_data(result["user_id"], req.device_id)

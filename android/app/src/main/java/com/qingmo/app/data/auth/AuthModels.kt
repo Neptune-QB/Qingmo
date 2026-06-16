@@ -29,6 +29,7 @@ data class AuthResponse(
     @SerializedName("user_id") val userId: Int = 0,
     val username: String = "",
     val nickname: String = "",
+    val avatar: String = "",
     val token: String = "",
     val error: String = "",
 )

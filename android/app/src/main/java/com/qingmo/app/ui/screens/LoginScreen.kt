@@ -3,6 +3,7 @@ package com.qingmo.app.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -15,8 +16,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.painterResource
 import com.qingmo.app.data.auth.AuthRepository
 import com.qingmo.app.data.auth.LoginRequest
 import com.qingmo.app.data.auth.TokenManager
@@ -41,17 +44,24 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .background(Background)
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         // 标题
+        Image(
+            painter = painterResource(com.qingmo.app.R.drawable.xiaomo_login),
+            contentDescription = "青墨",
+            modifier = Modifier.size(120.dp),
+        )
+        Spacer(Modifier.height(4.dp))
         Text(
-            text = "🎬 青墨短剧",
+            text = "青墨短剧",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
-            color = Primary,
+            color = GraphiteTeal,
         )
         Spacer(Modifier.height(4.dp))
         Text(
@@ -102,7 +112,7 @@ fun LoginScreen(
             Text(
                 text = it,
                 fontSize = 13.sp,
-                color = OnSurfaceMuted,
+                color = Color(0xFFE53935),
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Start,
             )
@@ -125,7 +135,7 @@ fun LoginScreen(
                     isLoading = false
                     result.onSuccess { resp ->
                         if (resp.ok) {
-                            TokenManager.saveAuth(resp.token, resp.userId, resp.username, resp.nickname)
+                            TokenManager.saveAuth(resp.token, resp.userId, resp.username, resp.nickname, resp.avatar)
                             onLoginSuccess()
                         } else {
                             error = resp.error.ifEmpty { "登录失败" }

@@ -120,7 +120,7 @@ def login_user(username: str, password: str) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, password_hash, nickname FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, nickname, avatar FROM users WHERE username = ?",
         (username,),
     )
     row = cursor.fetchone()
@@ -134,6 +134,7 @@ def login_user(username: str, password: str) -> dict:
         "user_id": row["id"],
         "username": row["username"],
         "nickname": row["nickname"] or row["username"],
+        "avatar": row["avatar"] or "",
         "token": create_token(row["id"], row["username"]),
     }
 

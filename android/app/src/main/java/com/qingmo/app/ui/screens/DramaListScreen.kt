@@ -10,6 +10,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -27,6 +28,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,6 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -58,6 +62,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -76,7 +81,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +92,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.activity.compose.BackHandler
 import com.google.accompanist.swiperefresh.SwipeRefresh
 import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import coil.compose.AsyncImage
@@ -128,6 +137,11 @@ fun DramaListScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     val swipeRefreshState = rememberSwipeRefreshState(isRefreshing)
     var error by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredDramas = remember(dramas, searchQuery) {
+        if (searchQuery.isBlank()) dramas
+        else dramas.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    }
     var showXiaoMoPage by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showFullChat by remember { mutableStateOf(false) }
@@ -234,29 +248,103 @@ fun DramaListScreen(
                     TopAppBar(
                         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                         title = {
-                            Text(
-                                "青墨",
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = GraphiteTeal,
-                            )
-                        },
-                        actions = {
-                            IconButton(onClick = { showXiaoMoPage = true }) {
-                                Icon(
-                                    Icons.Filled.SmartToy,
-                                    contentDescription = "小墨",
-                                    tint = GraphiteTeal,
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "青墨",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = GraphiteTeal,
                                 )
-                            }
-                            IconButton(onClick = onProfileClick) {
-                                Icon(
-                                    Icons.Filled.Person,
-                                    contentDescription = "我的",
-                                    tint = OnSurface,
+                                Spacer(Modifier.width(10.dp))
+                                var tfFocused by remember { mutableStateOf(false) }
+                                val tfBorderColor by animateColorAsState(
+                                    targetValue = if (tfFocused) GraphiteTeal
+                                                   else OnSurfaceVariant.copy(alpha = 0.25f),
+                                    label = "tfBorder",
                                 )
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp),
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.fillMaxSize(),
+                                        shape = RoundedCornerShape(22.dp),
+                                        color = Color.White,
+                                        border = BorderStroke(1.dp, tfBorderColor),
+                                    ) {}
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 12.dp)
+                                            .onFocusChanged { tfFocused = it.isFocused },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Search,
+                                            contentDescription = "搜索",
+                                            tint = OnSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            if (searchQuery.isEmpty()) {
+                                                Text(
+                                                    "搜索短剧...",
+                                                    color = OnSurfaceVariant.copy(alpha = 0.6f),
+                                                    fontSize = 14.sp,
+                                                )
+                                            }
+                                            BasicTextField(
+                                                value = searchQuery,
+                                                onValueChange = { searchQuery = it },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                                cursorBrush = SolidColor(GraphiteTeal),
+                                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                                    color = OnSurface,
+                                                ),
+                                            )
+                                        }
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(
+                                                onClick = { searchQuery = "" },
+                                                modifier = Modifier.size(24.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Close,
+                                                    contentDescription = "清除",
+                                                    tint = OnSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(onClick = { showXiaoMoPage = true }) {
+                                    Icon(
+                                        Icons.Filled.SmartToy,
+                                        contentDescription = "小墨",
+                                        tint = GraphiteTeal,
+                                    )
+                                }
+                                IconButton(onClick = onProfileClick) {
+                                    Icon(
+                                        Icons.Filled.Person,
+                                        contentDescription = "我的",
+                                        tint = OnSurface,
+                                    )
+                                }
                             }
                         },
+                        actions = {},
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = Background,
                             titleContentColor = MaterialTheme.colorScheme.onBackground,
@@ -273,10 +361,10 @@ fun DramaListScreen(
                             onRetry = { loadDramas() },
                             modifier = Modifier.padding(padding),
                         )
-                    dramas.isEmpty() -> EmptyState(Modifier.padding(padding))
+                    filteredDramas.isEmpty() -> EmptyState(Modifier.padding(padding))
                     else ->
                         DramaGrid(
-                            dramas = dramas,
+                            dramas = filteredDramas,
                             onDramaClick = { id ->
                                 scope.launch {
                                     delay(150L)
@@ -340,7 +428,8 @@ fun DramaListScreen(
             }
         }
 
-        if (showXiaoMoPage && !showSettings) {
+        if (showXiaoMoPage && !showSettings && !showFullChat) {
+            BackHandler { showXiaoMoPage = false }
             Column(
                 Modifier
                     .fillMaxSize()
@@ -383,9 +472,11 @@ fun DramaListScreen(
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     ) {
                         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(44.dp).background(CardIconTeal, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.SmartToy, null, tint = Color.White, modifier = Modifier.size(24.dp))
-                            }
+                            Image(
+                                painter = painterResource(com.qingmo.app.R.drawable.xiaomo_chat),
+                                contentDescription = "和小墨聊天",
+                                modifier = Modifier.size(44.dp),
+                            )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text("和小墨聊天", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -419,6 +510,15 @@ fun DramaListScreen(
         }
 
         if (showFullChat) {
+            BackHandler {
+                if (selectedSessionId != null) {
+                    selectedSessionId = null
+                    selectedSessionTitle = ""
+                    loadSessions()
+                } else {
+                    showFullChat = false
+                }
+            }
             Column(
                 Modifier
                     .fillMaxSize()

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,10 +29,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +43,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +76,7 @@ import com.qingmo.app.ui.theme.SurfaceVariant
 import com.qingmo.app.xiaomo.XiaoMoEmotion
 import com.qingmo.app.xiaomo.XiaoMoCore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
@@ -99,11 +104,21 @@ fun XiaoMoChatPanel(
     var lastRecommendedDramaId by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
+    // 始终保持最新 dramaContext（切换剧集后 sendMessage 能拿到新值）
+    val latestDramaContext by rememberUpdatedState(dramaContext)
+
     // 外部传入persistentMessages已初始化欢迎消息，退出抽屉完全保留历史记录
 
-    // 自动滚动到最新消息
+    // 自动滚动到最新消息（新增消息 + 流式内容更新都触发）
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+    // 流式输出内容更新时实时跟随滚动
+    val lastContent = messages.lastOrNull()?.content ?: ""
+    LaunchedEffect(lastContent) {
+        if (isStreaming && messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
@@ -164,7 +179,7 @@ fun XiaoMoChatPanel(
                     userMessage = cleanText,
                     userId = userId,
                     history = history,
-                    dramaContext = dramaContext,
+                    dramaContext = latestDramaContext,
                 ).collect { chunk ->
                     withContext(Dispatchers.Main) {
                         val current = messages[msgIndex]
@@ -189,10 +204,27 @@ fun XiaoMoChatPanel(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().imePadding()) {
-        // 消息列表
+    BoxWithConstraints(modifier = modifier
+        .fillMaxWidth()
+        .imePadding()
+    ) {
+        val ch = maxHeight
+        LaunchedEffect(ch) {
+            if (messages.isNotEmpty()) {
+                listState.animateScrollToItem(messages.size - 1)
+            }
+        }
+        Column(Modifier.fillMaxSize()) {
+        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        // 消息列表 — 点击空白区域收起键盘
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                ) { focusManager.clearFocus() },
             state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -208,12 +240,14 @@ fun XiaoMoChatPanel(
 
         Spacer(Modifier.height(6.dp))
 
-        QuickPromptChips(
-            enabled = !isStreaming,
-            onPromptClick = { prompt -> sendMessage(prompt) },
-        )
-
-        Spacer(Modifier.height(6.dp))
+        // 快捷标签：仅在外层 Agent（非播放页）时显示
+        if (dramaContext == null) {
+            QuickPromptChips(
+                enabled = !isStreaming,
+                onPromptClick = { prompt -> sendMessage(prompt) },
+            )
+            Spacer(Modifier.height(6.dp))
+        }
 
         // 输入区域
         ChatInputField(
@@ -221,7 +255,23 @@ fun XiaoMoChatPanel(
             onValueChange = { inputText = it },
             onSend = { sendMessage(inputText) },
             enabled = !isStreaming,
+            onFocused = {
+                val lastIdx = messages.size - 1
+                if (lastIdx >= 0) {
+                    scope.launch {
+                        delay(300L)
+                        listState.animateScrollToItem(lastIdx)
+                    }
+                }
+            },
+            onStartTyping = {
+                val lastIdx = messages.size - 1
+                if (lastIdx >= 0) {
+                    scope.launch { listState.animateScrollToItem(lastIdx) }
+                }
+            },
         )
+    }
     }
 }
 
@@ -414,18 +464,17 @@ private fun QuickPromptChips(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
     ) {
         items(quickPrompts) { prompt ->
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(if (enabled) GraphiteTealSoft else Color(0xFFFAFAFA))
-                    .clickable(enabled = enabled) { onPromptClick(prompt) }
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            Surface(
+                modifier = Modifier.clickable(enabled = enabled) { onPromptClick(prompt) },
+                shape = RoundedCornerShape(18.dp),
+                color = if (enabled) GraphiteTealSoft else Color(0xFFF5F5F5),
             ) {
                 Text(
                     text = prompt,
                     color = if (enabled) GraphiteTeal else OnSurfaceMuted,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
         }
@@ -446,13 +495,14 @@ private fun ChatBubble(
     val isUser = message.role == ChatMessage.Role.User
     val contentEmpty = message.content.isEmpty() && !showTypingIndicator
 
-    val bgColor = if (isUser) Color(0xFFF1F1F1) else Color.White
-    val textColor = Color(0xFF222222)
+    val bgColor = if (isUser) Color(0xFF3D5A54) else Color.White
+    val textColor = if (isUser) Color.White else Color(0xFF222222)
+    val bubbleElevation = 1.dp
     val shape = RoundedCornerShape(
-        topStart = 12.dp,
-        topEnd = 12.dp,
-        bottomStart = if (isUser) 12.dp else 4.dp,
-        bottomEnd = if (isUser) 4.dp else 12.dp,
+        topStart = 16.dp,
+        topEnd = 16.dp,
+        bottomStart = if (isUser) 16.dp else 4.dp,
+        bottomEnd = if (isUser) 4.dp else 16.dp,
     )
 
     Row(
@@ -479,10 +529,10 @@ private fun ChatBubble(
         if (!contentEmpty) {
             Box(
                 modifier = Modifier
-                    .widthIn(max = 220.dp)
+                    .widthIn(max = 240.dp)
                     .clip(shape)
                     .background(bgColor)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 Column {
                     if (message.content.isNotEmpty()) {
@@ -596,19 +646,29 @@ private fun ChatInputField(
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     enabled: Boolean,
+    onFocused: (() -> Unit)? = null,
+    onStartTyping: (() -> Unit)? = null,
 ) {
+    var localFocused by remember { mutableStateOf(false) }
+    val inputBgColor = if (localFocused) Color.White else Color(0xFFF4F4F4)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFFF4F4F4))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .clip(RoundedCornerShape(24.dp))
+            .background(inputBgColor)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicTextField(
             value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.weight(1f),
+            onValueChange = { newVal ->
+                if (value.isEmpty() && newVal.isNotEmpty()) onStartTyping?.invoke()
+                onValueChange(newVal)
+            },
+            modifier = Modifier.weight(1f).onFocusChanged {
+                localFocused = it.isFocused
+                if (it.isFocused) onFocused?.invoke()
+            },
             textStyle = TextStyle(
                 color = OnSurface,
                 fontSize = 13.sp,
@@ -637,13 +697,13 @@ private fun ChatInputField(
         IconButton(
             onClick = onSend,
             enabled = enabled && value.isNotBlank(),
-            modifier = Modifier.size(32.dp),
+            modifier = Modifier.size(44.dp),
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Send,
                 contentDescription = "发送",
                 tint = if (value.isNotBlank()) GraphiteTeal else Border,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(22.dp),
             )
         }
     }

@@ -12,7 +12,7 @@ data class HighlightInteractionPreset(
 private val typeMap = mapOf(
     "power_moment" to HighlightInteractionPreset("爽", theme = "爽点时刻", reactionText = "太爽了！", interactionKey = "thrill"),
     "face_slap" to HighlightInteractionPreset("爽", theme = "打脸时刻", reactionText = "这脸打得啪啪响！", interactionKey = "thrill"),
-    "slapback" to HighlightInteractionPreset("爽", theme = "打脸时刻", reactionText = "打脸来得太快！", interactionKey = "thrill"),
+    "slapback" to HighlightInteractionPreset("爽", theme = "打脸时刻", reactionText = "觉得爽到了！！", interactionKey = "thrill"),
     "cliffhanger" to HighlightInteractionPreset("急", theme = "悬念卡点", reactionText = "不要停啊！", interactionKey = "hype"),
     "suspense" to HighlightInteractionPreset("急", theme = "紧张悬念", reactionText = "紧张到窒息...", interactionKey = "hype"),
     "reversal" to HighlightInteractionPreset("惊", theme = "反转时刻", reactionText = "完全没想到！", interactionKey = "shock"),

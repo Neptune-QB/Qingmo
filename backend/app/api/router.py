@@ -17,7 +17,7 @@ from app.schemas import (
     InteractionReport, InteractionStats,
     XiaoMoGif, XiaoMoGifCreate,
 )
-from app.services.llm_service import llm_service, classify_intent, search_dramas, get_user_profile_summary, retrieve_plot_context
+from app.services.llm_service import llm_service, classify_intent, search_dramas, get_user_profile_summary, retrieve_plot_context, SYSTEM_PROMPT_XIAOMO_SEARCH
 from app.api.auth_router import get_current_user, get_optional_user
 
 router = APIRouter()
@@ -84,16 +84,15 @@ async def agent_chat(req: AgentChatRequest):
                 f"【ID:{d['id']}】《{d['title']}》 — {'、'.join(d['tags'][:3]) if d['tags'] else '暂无标签'}"
                 for d in dramas
             )
-            prompt = (
-                f"用户说：「{safe_message}」\n\n"
-                f"可推荐的短剧：\n{drama_list_text}\n\n"
-                "要求：\n"
-                "1. 严格按用户说的数量推荐\n"
-                "2. 每部剧必须先写【ID:数字】，再写一句话简介\n"
-                "3. 活泼可爱语气，不要输出任何链接"
-            )
+            drama_context = {"drama_list": drama_list_text}
+            search_prompt = f"用户说：「{safe_message}」\n\n可推荐的短剧：\n{drama_list_text}"
             full_text = ""
-            async for chunk in llm_service.chat(user_message=prompt, history=req.history):
+            async for chunk in llm_service.chat(
+                user_message=search_prompt,
+                history=req.history,
+                system_prompt=SYSTEM_PROMPT_XIAOMO_SEARCH,
+                drama_context=drama_context,
+            ):
                 full_text += chunk
                 yield chunk.encode("utf-8")
             # 提取 LLM 实际推荐的剧 ID，精准补链接
@@ -809,7 +808,7 @@ async def _generate_xiaomo_comment_reply(
         async with llm_service.client as client:
             resp = await asyncio.wait_for(
                 client.chat.completions.create(
-                    model=settings.DOUBAO_EP_ID,
+                    model=llm_service.model,
                     messages=messages,
                     stream=False,
                     temperature=0.8,
@@ -1128,7 +1127,7 @@ async def trigger_highlight_bubble(
         "heartbreak": "刀子来得太快💔",
         "sweet_moment": "磕到了磕到了🥰",
         "reversal": "完全没想到啊！",
-        "slapback": "打脸来得太快！"
+        "slapback": "多少人觉得爽到了！！"
     }
     short_bubble = bubble_map.get(hl["highlight_type"], f"✨ {hl['title'][:12]}")
 
@@ -1162,7 +1161,7 @@ async def trigger_highlight_bubble(
                     async with llm_service.client as client:
                         resp = await _asyncio.wait_for(
                             client.chat.completions.create(
-                                model=settings.DOUBAO_EP_ID,
+                                model=llm_service.model,
                                 messages=[{"role": "user", "content": bubble_prompt}],
                                 stream=False, temperature=0.9, max_tokens=60,
                             ), timeout=8.0,
@@ -1364,9 +1363,11 @@ async def character_chat(char_id: int, user_message: str = Body(...), drama_id: 
         conn.close()
         return {"reply": "这个角色暂时不在哦~"}
 
-    # 取相关剧情摘要
-    cursor.execute("SELECT summary FROM drama_summaries WHERE drama_id = ? ORDER BY episode_id LIMIT 3", (drama_id,))
+    # 取相关剧情摘要（两表合并）
+    cursor.execute("SELECT summary FROM drama_summaries WHERE drama_id = ? ORDER BY episode_id LIMIT 10", (drama_id,))
     summaries = [s["summary"] for s in cursor.fetchall() if s["summary"]]
+    cursor.execute("SELECT COALESCE(long_summary, short_summary) as summary FROM episode_content_summary WHERE drama_id = ? ORDER BY episode_id LIMIT 10", (drama_id,))
+    summaries += [s["summary"] for s in cursor.fetchall() if s["summary"]]
     conn.close()
 
     if not llm_service.is_available:
@@ -1374,6 +1375,7 @@ async def character_chat(char_id: int, user_message: str = Body(...), drama_id: 
 
     persona = f"""你现在是《青墨短剧》中的角色「{char['name']}」。
 角色设定：
+- 名字：{char['name']}（注意：你的名字就是{char['name']}，不要说错！）
 - 身份：{char['role'] or '剧中角色'}
 - 简介：{char['description'] or '暂无'}
 - 人际关系：{char['relationships'] or '暂无'}
@@ -1389,23 +1391,26 @@ async def character_chat(char_id: int, user_message: str = Body(...), drama_id: 
 
     try:
         import asyncio
-        async with llm_service.client as client:
-            resp = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=settings.DOUBAO_EP_ID,
-                    messages=[
-                        {"role": "system", "content": persona},
-                        {"role": "user", "content": user_message},
-                    ],
-                    stream=False,
-                    temperature=0.8,
-                    max_tokens=200,
-                ),
-                timeout=15.0,
-            )
-            reply = (resp.choices[0].message.content or "").strip()
-            return {"reply": reply or f"（{char['name']}正在思考怎么回你...）"}
-    except Exception:
+        resp = await asyncio.wait_for(
+            llm_service.client.chat.completions.create(
+                model=llm_service.model,
+                messages=[
+                    {"role": "system", "content": persona},
+                    {"role": "user", "content": user_message},
+                ],
+                stream=False,
+                temperature=0.8,
+                max_tokens=200,
+            ),
+            timeout=30.0,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return {"reply": reply or f"（{char['name']}正在思考怎么回你...）"}
+    except asyncio.TimeoutError:
+        return {"reply": f"（{char['name']}思考太久了，换个简单的问题试试？）"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"reply": f"（{char['name']}暂时掉线了，等一下再来找他吧~）"}
 
 

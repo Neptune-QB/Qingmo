@@ -12,7 +12,7 @@
 |------|------|
 | 客户端 | Kotlin · Jetpack Compose · ExoPlayer (Media3) · ViewPager2 · Retrofit · Coil |
 | 服务端 | Python 3.11 · FastAPI · Uvicorn · SQLite |
-| AI 模型 | Doubao-Seed-2.0-lite (火山引擎 Ark · OpenAI 兼容接口) |
+| AI 模型 | Doubao-Seed-2.0-lite / DeepSeek V4 Flash（OpenAI 兼容接口，配置切换） |
 | 数据层 | SQLite (`ju_flash.db`) · 21 张生产表 · 全量真实数据 |
 | 工具链 | ktlint · Gradle 8.7 |
 
@@ -81,10 +81,31 @@ Qingmo/
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env    # 填入 DOUBAO_API_KEY
+cp .env.example .env    # 填入 LLM 配置（见下方）
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 # http://127.0.0.1:8000/docs 自动生成 API 文档
 ```
+
+### Agent 接口 LLM 配置
+
+Agent 支持 Doubao 和 DeepSeek 两种 LLM，通过 `.env` 文件切换：
+
+```env
+# 选择 provider: doubao / deepseek
+LLM_PROVIDER=deepseek
+
+# DeepSeek
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+
+# Doubao
+DOUBAO_API_KEY=your-access-key
+DOUBAO_EP_ID=ep-xxxx
+DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+```
+
+`LLM_PROVIDER` 决定使用哪个厂商，只需填对应的一组密钥即可。
 
 ### 2. 准备视频数据
 

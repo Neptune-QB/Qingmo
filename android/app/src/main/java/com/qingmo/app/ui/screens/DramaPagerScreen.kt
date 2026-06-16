@@ -74,6 +74,10 @@ import androidx.compose.ui.graphics.Color
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.Image
+import android.graphics.BitmapFactory
+import com.qingmo.app.data.auth.TokenManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
@@ -270,7 +274,9 @@ private fun Pager(
                         showDanmakuInput = false
                         showCommentInput = false
                     } else {
-                        it.activePlayer?.playWhenReady = !(it.activePlayer?.playWhenReady ?: true)
+                        it.activePlayer?.let { p ->
+                            p.playWhenReady = !p.playWhenReady
+                        }
                     }
                 }
                 it.onLikeClick = { episodeId ->
@@ -911,6 +917,9 @@ private fun Pager(
         var bvChoice by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
         LaunchedEffect(showBranchVote) {
+            if (showBranchVote) {
+                adapter.activePlayer?.pause()
+            }
             kotlinx.coroutines.withContext(Dispatchers.IO) {
                 try {
                     val v = RetrofitClient.api.getBranchVote(detail.id.toInt(), userId)
@@ -1043,6 +1052,7 @@ private class NativeAdapter(
         val player = activePlayer ?: return
         isPlayingBranchVideo = true
         branchEpisodeId = aigcEpisodeId
+        activeVh?.playIcon?.visibility = View.GONE
         activeVh?.danmakuView?.clearDanmaku()
         // 加载 AIGC 剧集的弹幕
         scope.launch(Dispatchers.IO) {
@@ -1082,7 +1092,7 @@ private class NativeAdapter(
         isPlayingBranchVideo = false
         suppressChoicePanel = true
         val player = activePlayer ?: return
-        player.stop()
+        activeVh?.playIcon?.visibility = View.GONE
         player.setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl("videos/$dramaId/$epNum.mp4")))
         player.seekTo(savedPos)
         player.playWhenReady = true
@@ -2737,7 +2747,9 @@ fun XiaoMoChatSheet(
                                 fontSize = if (selected) 16.sp else 14.sp,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                                 color = if (selected) Color(0xFF333333) else Color(0xFF999999),
-                                modifier = Modifier.clickable { sheetTab = idx }.padding(horizontal = 6.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { sheetTab = idx }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
                             )
                             if (idx < tabs.lastIndex) {
                                 Box(Modifier.width(1.dp).height(20.dp).padding(horizontal = 6.dp).background(Color(0xFFEEEEEE)))
@@ -2784,12 +2796,81 @@ fun XiaoMoChatSheet(
                                     Spacer(Modifier.weight(1f))
                                     Text("💬 ${c["name"] ?: ""}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
                                 }
-                                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), reverseLayout = true) {
-                                    val rev = charMsgs.reversed()
-                                    items(rev.size) { idx -> val msg = rev[idx]; val isUser = msg.first == "user"
-                                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
-                                            Surface(shape = RoundedCornerShape(12.dp), color = if (isUser) Color(0xFF1E88E5) else Color(0xFFF0F0F0)) {
-                                                androidx.compose.material3.Text(msg.second, fontSize = 14.sp, color = if (isUser) Color.White else Color(0xFF333333), modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                                val charListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                                LaunchedEffect(charMsgs.size) {
+                                    if (charMsgs.isNotEmpty()) {
+                                        charListState.animateScrollToItem(charMsgs.size - 1)
+                                    }
+                                }
+                                androidx.compose.foundation.lazy.LazyColumn(
+                                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                                    state = charListState,
+                                ) {
+                                    items(charMsgs.size) { idx ->
+                                        val msg = charMsgs[idx]; val isUser = msg.first == "user"
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+                                            verticalAlignment = Alignment.Top,
+                                        ) {
+                                            // 角色头像（左侧）
+                                            if (!isUser) {
+                                                Surface(shape = CircleShape, color = Color(0xFF7C4DFF), modifier = Modifier.size(32.dp)) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            (c["name"] as? String ?: "?").first().uppercase(),
+                                                            color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                                        )
+                                                    }
+                                                }
+                                                Spacer(Modifier.width(8.dp))
+                                            }
+                                            Surface(
+                                                shape = RoundedCornerShape(
+                                                    topStart = 14.dp, topEnd = 14.dp,
+                                                    bottomStart = if (isUser) 14.dp else 4.dp,
+                                                    bottomEnd = if (isUser) 4.dp else 14.dp,
+                                                ),
+                                                color = if (isUser) Color(0xFF3D5A54) else Color.White,
+                                                modifier = Modifier.widthIn(max = 260.dp),
+                                            ) {
+                                                androidx.compose.material3.Text(
+                                                    msg.second, fontSize = 13.sp, lineHeight = 18.sp,
+                                                    color = if (isUser) Color.White else Color(0xFF333333),
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                )
+                                            }
+                                            // 用户头像（右侧）
+                                            if (isUser) {
+                                                Spacer(Modifier.width(8.dp))
+                                                val ctx = androidx.compose.ui.platform.LocalContext.current
+                                                val userAvatarBmp = remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+                                                LaunchedEffect(Unit) {
+                                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                        val avatarStr = TokenManager.getAvatar() ?: ""
+                                                        if (avatarStr.isNotEmpty()) {
+                                                            try {
+                                                                val base64Part = avatarStr.removePrefix("data:image/jpeg;base64,")
+                                                                val bytes = java.util.Base64.getDecoder().decode(base64Part)
+                                                                userAvatarBmp.value = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                                            } catch (_: Exception) {}
+                                                        }
+                                                    }
+                                                }
+                                                if (userAvatarBmp.value != null) {
+                                                    Image(
+                                                        bitmap = userAvatarBmp.value!!.asImageBitmap(),
+                                                        contentDescription = "我",
+                                                        modifier = Modifier.size(32.dp).clip(CircleShape),
+                                                        contentScale = ContentScale.Crop,
+                                                    )
+                                                } else {
+                                                    Surface(shape = CircleShape, color = Color(0xFFBDBDBD), modifier = Modifier.size(32.dp)) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Text("我", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
