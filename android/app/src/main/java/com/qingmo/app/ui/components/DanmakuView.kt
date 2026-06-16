@@ -260,7 +260,7 @@ class DanmakuView @JvmOverloads constructor(
             activeAnimators.add(anim)
             val occupyDuration = 12000L
             laneOccupiedUntil[lane] = now + waitMs + occupyDuration
-            if (!paused) {
+            if (!paused || skipWait) {
                 anim.start()
             }
         }

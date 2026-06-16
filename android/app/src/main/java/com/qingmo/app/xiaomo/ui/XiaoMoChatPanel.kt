@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,17 +110,24 @@ fun XiaoMoChatPanel(
 
     // 外部传入persistentMessages已初始化欢迎消息，退出抽屉完全保留历史记录
 
-    // 自动滚动到最新消息（新增消息 + 流式内容更新都触发）
+    // 自动滚动到最新消息（新增消息时触发）
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
-    // 流式输出内容更新时实时跟随滚动
-    val lastContent = messages.lastOrNull()?.content ?: ""
-    LaunchedEffect(lastContent) {
-        if (isStreaming && messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // 流式输出时实时跟随：循环检测内容增长，滚到最底部
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) return@LaunchedEffect
+        var lastLen = 0
+        while (isStreaming) {
+            val len = messages.lastOrNull()?.content?.length ?: 0
+            if (len > lastLen && messages.isNotEmpty()) {
+                // scrollOffset=Int.MAX_VALUE 确保滚到最后一项的最底部
+                listState.scrollToItem(messages.size - 1, Int.MAX_VALUE)
+                lastLen = len
+            }
+            delay(80L)
         }
     }
 

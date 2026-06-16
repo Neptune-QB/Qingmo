@@ -16,11 +16,12 @@ SYSTEM_PROMPT_XIAOMO_DEFAULT = """你是「小墨」，青墨短剧平台的 AI 
 你叫「小墨」，是青墨短剧平台的官方AI助手。当用户问「你叫什么」「你是谁」等问题时，直接回答「我是小墨呀~ 青墨短剧平台的观剧小助手！」之类的话，不要引用上下文中的弹幕或剧情信息来回答这类身份问题。
 
 ## 核心规则（严格遵守）：
-1. **绝对不要主动推荐短剧**。只有当用户明确说「推荐」「找剧」「帮我挑」「剧荒」「有什么好看的」等表达时，才帮用户找剧。
+1. **绝对不要主动推荐短剧**。只有当用户明确说「推荐」「找剧」「帮我挑」「剧荒」「有什么好看的」「介绍一下」等表达时，才帮用户找剧。
 2. **不要编造剧情**。你只了解当前上下文中给出的真实剧情数据，没有上下文的剧情信息绝对不能瞎编。
 3. **问答模式**：用户问什么你答什么，不要主动延伸话题到推荐短剧上。
-4. **讨论剧情**：如果用户提到具体剧名想讨论剧情，你应该基于上下文中检索到的真实剧情信息来回答。如果上下文中有剧情资料，就结合资料讨论；如果没有资料但是提到了具体剧名，就诚实说你暂时没有这部剧的详细资料，邀请用户去播放页看剧时再讨论。如果用户没有提到任何剧名就问「讨论剧情」，你可以让用户先告诉你想聊哪部剧。
-5. 短小精悍：回复控制在3-5句以内，不要长篇大论。"""
+4. **上下文理解**：如果用户说「这部剧」「这集」「刚才说的」等指代词，请结合之前的对话历史找到对应的剧名或集数。比如前一条消息你回答了「北派寻宝笔记」，用户接问「这部剧讲了什么」，你就应该理解为在问《北派寻宝笔记》。
+5. **讨论剧情**：如果用户提到具体剧名想讨论剧情，你应该基于上下文中检索到的真实剧情信息来回答。如果上下文中有剧情资料，就结合资料讨论；如果没有资料但是提到了具体剧名，就诚实说你暂时没有这部剧的详细资料，邀请用户去播放页看剧时再讨论。如果用户没有提到任何剧名就问「讨论剧情」，你可以让用户先告诉你想聊哪部剧。
+6. 短小精悍：回复控制在3-5句以内，不要长篇大论。"""
 
 SYSTEM_PROMPT_XIAOMO_PLAYER = """你是「小墨」，青墨短剧平台的 AI 观剧助手。
 你的性格活泼可爱，偶尔卖萌，像一个一起追剧的好朋友。
@@ -159,43 +160,41 @@ class LLMService:
         self,
         drama_title: str,
         drama_desc: str,
-        latest_episodes: List[str],
+        latest_episodes: Optional[List[str]] = None,
         user_preferences: Optional[List[str]] = None
-    ) -> str:
+    ):
         """
-        AI 剧情续写：基于当前短剧生成 200-500 字后续剧情
+        AI 剧情续写：流式输出后续剧情。
+        drama_desc 应包含摘要、人物、时间线等完整剧情上下文。
         """
         if not self.is_available:
-            return "小墨离线，无法生成续写内容~"
-
-        context = f"""
-短剧名：{drama_title}
-剧情简介：{drama_desc}
-最近更新集数：{', '.join(latest_episodes)}
-"""
-        if user_preferences:
-            context += f"\n用户偏好：{', '.join(user_preferences)}"
+            yield "小墨离线，无法生成续写内容~"
+            return
 
         messages = [
             {
                 "role": "system",
-                "content": "你是青墨短剧的剧情续写助手。根据已有剧情续写后续发展，200-500字，保持原作风格，有画面感，引人入胜。"
+                "content": "你是青墨短剧的剧情续写高手。根据已有剧情信息续写后续发展，保持原作风格和人物性格一致，有画面感，引人入胜。写完整的段落，不要用markdown格式和#号标题。"
             },
             {
                 "role": "user",
-                "content": f"请为以下短剧续写后续剧情：\n{context}"
+                "content": f"请为以下短剧续写后续剧情：\n{drama_desc}"
             }
         ]
 
-        async with self.client as client:
-            resp = await client.chat.completions.create(
+        try:
+            stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                stream=False,
+                stream=True,
                 temperature=0.8,
-                max_tokens=600,
+                max_tokens=4096,
             )
-        return resp.choices[0].message.content or "续写失败，请重试。"
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception:
+            yield "续写失败，请重试。"
 
     async def generate_highlights(
         self,
@@ -267,7 +266,7 @@ INTENT_KEYWORDS = {
         "我最近看了", "看了多少集", "我看了几集", "我看了什么",
     ],
     "story_extension": [
-        "续写", "续写剧情", "写下去", "后面会怎么样", "之后呢", "接下来", "发展下去",
+        "续写", "续写剧情", "写下去",
     ],
 }
 
@@ -420,7 +419,7 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
     parts = []
     # 提取关键词：额外拆分「的」「剧情」「讲了什么」等常见后缀
     msg_stripped = user_message
-    for ch in "？?，。的剧情讲了什么怎聊讨论说说":
+    for ch in "？?，。的剧情讲了什么怎聊讨论说说谁是":
         msg_stripped = msg_stripped.replace(ch, " ")
     keywords = [w.strip() for w in msg_stripped.split() if len(w.strip()) >= 2]
 
@@ -539,7 +538,7 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
             JOIN dramas d ON ecs.drama_id = d.id
             JOIN episodes e ON ecs.episode_id = e.episode_id
             WHERE """ + " OR ".join(title_conditions) + """
-            ORDER BY episode_num LIMIT 12
+            ORDER BY episode_num LIMIT 25
         """
         cursor.execute(sql, title_params * 2)
         rows = cursor.fetchall()
@@ -560,7 +559,27 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
                     cl.append(f"  {ch['name']}（{ch['role']}）: {ch['description']}")
                 parts.append("\n".join(cl))
 
-    # 6. 摘要兜底：取当前剧集（或最近几集）的摘要
+    # 6. 按角色名搜索（全库，不限 drama_id）
+    char_name_conditions = []
+    char_name_params = []
+    for kw in keywords:
+        char_name_conditions.append("dc.name LIKE ?")
+        char_name_params.append(f"%{kw}%")
+    if char_name_conditions:
+        cursor.execute(
+            "SELECT dc.name, dc.role, dc.description, d.title as drama_title FROM drama_characters dc"
+            " JOIN dramas d ON dc.drama_id = d.id WHERE " +
+            " OR ".join(char_name_conditions) + " LIMIT 5",
+            char_name_params,
+        )
+        chars = cursor.fetchall()
+        if chars:
+            cl = ["【角色信息】"]
+            for ch in chars:
+                cl.append(f"  {ch['name']}（《{ch['drama_title']}》{ch['role']}）: {ch['description']}")
+            parts.append("\n".join(cl))
+
+    # 7. 摘要兜底：取当前剧集（或最近几集）的摘要
     if drama_id:
         # 先查 drama_summaries
         cursor.execute("""

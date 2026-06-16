@@ -18,6 +18,11 @@ from app.schemas import (
     XiaoMoGif, XiaoMoGifCreate,
 )
 from app.services.llm_service import llm_service, classify_intent, search_dramas, get_user_profile_summary, retrieve_plot_context, SYSTEM_PROMPT_XIAOMO_SEARCH
+
+# 演示用：所有新增时间统一设为6天前
+from datetime import datetime, timedelta
+def _now():
+    return datetime.now().isoformat(sep=' ', timespec='seconds')
 from app.api.auth_router import get_current_user, get_optional_user
 
 router = APIRouter()
@@ -34,6 +39,64 @@ def health():
 
 
 # ===== Agent 新增接口 =====
+def _build_story_extension_context(drama_id, drama_title: str, episode_num: str) -> str:
+    """为剧情续写构建丰富的上下文：摘要 + 人物 + 时间线"""
+    if not drama_id:
+        return drama_title
+    conn = get_connection()
+    cursor = conn.cursor()
+    parts = [f"《{drama_title}》"]
+    # 剧集内容摘要（优先用 episode_content_summary）
+    cursor.execute(
+        "SELECT short_summary, long_summary FROM episode_content_summary WHERE drama_id=? ORDER BY episode_id LIMIT 3",
+        (drama_id,)
+    )
+    summaries = cursor.fetchall()
+    if summaries:
+        parts.append("\n【剧情摘要】")
+        for s in summaries:
+            short = s[0] if isinstance(s, tuple) else s["short_summary"]
+            long = s[1] if isinstance(s, tuple) else s["long_summary"]
+            parts.append(short or long or "")
+    else:
+        # 回退到 drama_summaries
+        cursor.execute(
+            "SELECT summary FROM drama_summaries WHERE drama_id=? ORDER BY episode_id LIMIT 3",
+            (drama_id,)
+        )
+        for s in cursor.fetchall():
+            parts.append(s[0] if isinstance(s, tuple) else s["summary"])
+    # 人物
+    cursor.execute(
+        "SELECT name, role, description FROM drama_characters WHERE drama_id=? LIMIT 5",
+        (drama_id,)
+    )
+    chars = cursor.fetchall()
+    if chars:
+        lines = ["【主要人物】"]
+        for ch in chars:
+            if isinstance(ch, tuple):
+                lines.append(f"  {ch[0]}（{ch[1]}）：{ch[2]}")
+            else:
+                lines.append(f"  {ch['name']}（{ch['role']}）：{ch['description']}")
+        parts.append("\n".join(lines))
+    # 最近时间线事件
+    cursor.execute(
+        """SELECT dt.event_desc FROM drama_timeline dt
+           JOIN episodes e ON dt.episode_id=e.episode_id
+           WHERE dt.drama_id=? ORDER BY e.episode_num DESC LIMIT 5""",
+        (drama_id,)
+    )
+    events = cursor.fetchall()
+    if events:
+        lines = ["【最近关键事件】"]
+        for ev in events:
+            text = ev[0] if isinstance(ev, tuple) else ev["event_desc"]
+            lines.append(f"  - {text}")
+        parts.append("\n".join(lines))
+    conn.close()
+    return "\n".join(parts)
+
 def _build_page_aware_context(page_context):
     """根据当前页面类型自动构建场景上下文，小墨自动知道用户当前在做什么"""
     if not page_context:
@@ -115,9 +178,12 @@ async def agent_chat(req: AgentChatRequest):
                 yield "\n\n(还想知道什么？问小墨就行~)".encode("utf-8")
         elif intent == "story_extension":
             drama_title = (req.context or {}).get("drama_title", "")
-            latest_eps = [str((req.context or {}).get("episode_num", "1"))]
-            result = await llm_service.story_extension(drama_title, drama_title, latest_eps)
-            yield result.encode("utf-8")
+            drama_id = (req.context or {}).get("drama_id") or (req.context or {}).get("dramaId")
+            episode_num = str((req.context or {}).get("episode_num", "1"))
+            # 注入剧情数据：摘要 + 人物 + 最近集数
+            plot_context = _build_story_extension_context(drama_id, drama_title, episode_num)
+            async for chunk in llm_service.story_extension(drama_title, plot_context, [episode_num]):
+                yield chunk.encode("utf-8")
             return
         else:
             safe_context = dict(req.context) if req.context else {}
@@ -140,13 +206,15 @@ async def agent_chat(req: AgentChatRequest):
 @router.post("/agent/story-extension")
 async def story_extension(req: StoryExtensionRequest):
     """AI 剧情续写接口"""
-    result = await llm_service.story_extension(
+    parts = []
+    async for chunk in llm_service.story_extension(
         drama_title=req.drama_title,
         drama_desc=req.drama_desc,
         latest_episodes=req.latest_episodes,
         user_preferences=req.user_preferences
-    )
-    return {"extension": result}
+    ):
+        parts.append(chunk)
+    return {"extension": "".join(parts)}
 
 
 @router.post("/agent/generate-highlights")
@@ -883,7 +951,7 @@ def post_comment(
         """INSERT INTO episode_comments
            (episode_id, user_id, nickname, text, parent_id, reply_to_nickname, created_at)
            VALUES (?,?,?,?,?,?,?)""",
-        (episode_id, str(uid), nickname, pure_text, parent_id, reply_to_nickname_safe, datetime.now().isoformat())
+        (episode_id, str(uid), nickname, pure_text, parent_id, reply_to_nickname_safe, _now())
     )
     cursor.execute("UPDATE episodes SET comment_count = comment_count + 1 WHERE episode_id = ?", (episode_id,))
     conn.commit()
@@ -1022,8 +1090,8 @@ def create_chat_session(req: CreateSessionRequest, user: Optional[dict] = Depend
     conn = get_connection(); cursor = conn.cursor()
     uid = str(user["id"]) if user else req.user_id
     cursor.execute(
-        "INSERT INTO user_chat_sessions (user_id, title, drama_id) VALUES (?, ?, ?)",
-        (uid, req.title, req.drama_id)
+        "INSERT INTO user_chat_sessions (user_id, title, drama_id, created_at) VALUES (?, ?, ?, ?)",
+        (uid, req.title, req.drama_id, _now())
     )
     new_id = cursor.lastrowid
     conn.commit()
@@ -1066,10 +1134,10 @@ def append_chat_message(req: AppendMessageRequest, user: Optional[dict] = Depend
     conn = get_connection(); cursor = conn.cursor()
     if user:
         _verify_session_owner(cursor, req.session_id, str(user["id"]))
-    cursor.execute("INSERT INTO user_chat_messages (session_id, role, content) VALUES (?, ?, ?)",
-                   (req.session_id, req.role, req.content))
+    cursor.execute("INSERT INTO user_chat_messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                   (req.session_id, req.role, req.content, _now()))
     new_id = cursor.lastrowid
-    cursor.execute("UPDATE user_chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (req.session_id,))
+    cursor.execute("UPDATE user_chat_sessions SET updated_at = ? WHERE id = ?", (_now(), req.session_id))
     conn.commit()
     conn.close()
     return {"ok": True, "message_id": new_id}

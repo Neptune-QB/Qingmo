@@ -64,6 +64,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -301,6 +302,11 @@ private fun Pager(
                     showChoicePanel = true
                     it.activePlayer?.pause()
                 }
+                it.onChoicePanelHide = {
+                    showChoicePanel = false
+                    activeChoiceHl = null
+                    showBranchVote = false
+                }
                 it.onAigcEnd = { showAigcEndPanel = true }
                 it.userId = userId
             }
@@ -383,6 +389,9 @@ private fun Pager(
                         override fun onPageSelected(p: Int) {
                             adapter.setActive(p)
                             curPage = p
+                            showChoicePanel = false
+                            activeChoiceHl = null
+                            showBranchVote = false
                         }
                     },
                 )
@@ -918,6 +927,7 @@ private fun Pager(
         var bvChoice by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
         LaunchedEffect(showBranchVote) {
+            adapter.suppressInteractionBtn = showBranchVote
             if (showBranchVote) {
                 adapter.activePlayer?.pause()
             }
@@ -935,7 +945,7 @@ private fun Pager(
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { showBranchVote = false }) {
                 Surface(Modifier.fillMaxWidth().padding(32.dp).align(Alignment.Center), shape = RoundedCornerShape(20.dp), color = Color.White) {
                     Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("🎬 剧情分支投票", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+                        Text("🎬 剧情分支投票", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = GraphiteTeal)
                         Spacer(Modifier.height(8.dp))
                         Text(bd["question"] as? String ?: "", fontSize = 14.sp, color = Color(0xFF555555), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         Spacer(Modifier.height(16.dp))
@@ -946,7 +956,7 @@ private fun Pager(
                             val isMy = bvChoice == key
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (isMy) Color(0xFF7C4DFF).copy(alpha = 0.15f) else Color(0xFFF5F5F5),
+                                color = if (isMy) GraphiteTeal.copy(alpha = 0.15f) else Color(0xFFF5F5F5),
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                                     .clickable(enabled = bvChoice == null && !(bd["expired"] as? Boolean ?: false)) {
                                         bvChoice = key
@@ -969,7 +979,7 @@ private fun Pager(
                             Spacer(Modifier.height(8.dp)); Text("投票已截止", fontSize = 12.sp, color = Color(0xFFE53935))
                         }
                         Spacer(Modifier.height(8.dp))
-                        TextButton(onClick = { showBranchVote = false }) { Text("关闭", color = Color(0xFF999999)) }
+                        TextButton(onClick = { showBranchVote = false }) { Text("关闭", color = GraphiteTeal) }
                     }
                 }
             }
@@ -1025,19 +1035,13 @@ private class NativeAdapter(
     var onFavoriteClick: ((Long) -> Unit)? = null,
     var onDanmakuClick: (() -> Unit)? = null,
     var onChoicePanelShow: ((com.qingmo.app.data.model.DramaHighlight) -> Unit)? = null,
+    var onChoicePanelHide: (() -> Unit)? = null,
     var onAigcEnd: (() -> Unit)? = null,
     var userId: String = "",
 ) : RecyclerView.Adapter<NativeAdapter.VH>() {
     val players = mutableMapOf<Int, ExoPlayer>()
     var activePlayer: ExoPlayer? = null
     var viewPager2: ViewPager2? = null
-    private val cacheDir by lazy {
-        java.io.File(ctx.cacheDir, "exoplayer_video_cache").apply { mkdirs() }
-    }
-    private val simpleCache by lazy { androidx.media3.datasource.cache.SimpleCache(cacheDir, androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(200L * 1024 * 1024)) }
-    private val cacheFactory by lazy { androidx.media3.datasource.cache.CacheDataSource.Factory()
-        .setCache(simpleCache)
-        .setUpstreamDataSourceFactory(androidx.media3.datasource.DefaultHttpDataSource.Factory()) }
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val progressJobs = mutableMapOf<Int, Job>()
     private val viewHolders = SparseArray<VH>()
@@ -1053,7 +1057,9 @@ private class NativeAdapter(
     private var globalCurrentDramaFavCount = 0
 
     internal var isPlayingBranchVideo = false
+    internal var suppressInteractionBtn = false
     internal var suppressChoicePanel = false
+    internal var choicePanelTriggered = false
     internal var branchEpisodeId = 0L
 
     fun playBranchVideo(url: String, aigcEpisodeId: Long = 2025001L) {
@@ -1062,6 +1068,8 @@ private class NativeAdapter(
         branchEpisodeId = aigcEpisodeId
         activeVh?.playIcon?.visibility = View.GONE
         activeVh?.danmakuView?.clearDanmaku()
+        // 刷新分支集数的评论/点赞计数
+        refreshCommentCount(aigcEpisodeId)
         // 加载 AIGC 剧集的弹幕
         scope.launch(Dispatchers.IO) {
             try {
@@ -1080,12 +1088,21 @@ private class NativeAdapter(
                 activeVh?.danmakuView?.post { activeVh?.danmakuView?.setDanmakuData(items) }
             } catch (_: Exception) {}
         }
-        player.stop()
-        player.setMediaItem(MediaItem.fromUri(url))
+        // 优先用本地缓存文件，零卡顿
+        val localFile = com.qingmo.app.QingmoApp.getCachedVideo(ctx.applicationContext as android.app.Application, "branch_2_1.mp4")
+        val mediaUri = if (localFile != null && localFile.exists() && localFile.length() > 0) localFile.toURI().toString() else url
+        player.setMediaItem(MediaItem.fromUri(mediaUri))
         player.playWhenReady = true
         player.prepare()
+        val localAigcId = aigcEpisodeId
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) {
+                    val cached = danmakuCache[localAigcId]
+                    if (cached != null) {
+                        activeVh?.danmakuView?.post { activeVh?.danmakuView?.setDanmakuData(cached) }
+                    }
+                }
                 if (state == Player.STATE_ENDED) {
                     player.removeListener(this)
                     player.seekTo(player.duration)
@@ -1099,17 +1116,22 @@ private class NativeAdapter(
     fun restoreFromBranch(savedPos: Long, dramaId: Int, epNum: Int) {
         isPlayingBranchVideo = false
         suppressChoicePanel = true
+        choicePanelTriggered = true
         val player = activePlayer ?: return
         activeVh?.playIcon?.visibility = View.GONE
-        player.setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl("videos/$dramaId/$epNum.mp4")))
+        val localFile = com.qingmo.app.QingmoApp.getCachedVideo(ctx.applicationContext as android.app.Application, "${dramaId}_${epNum}.mp4")
+        val uri = if (localFile != null) localFile.toURI().toString() else RetrofitClient.resolveMediaUrl("videos/$dramaId/$epNum.mp4")
+        player.setMediaItem(MediaItem.fromUri(uri))
+        player.prepare()
         player.seekTo(savedPos)
         player.playWhenReady = true
-        player.prepare()
         // 恢复原集弹幕
         val origEpId = (dramaId * 1000 + epNum).toLong()
         danmakuCache[origEpId]?.let { items ->
             activeVh?.danmakuView?.post { activeVh?.danmakuView?.setDanmakuData(items) }
         }
+        // 恢复原集评论计数
+        refreshCommentCount(origEpId)
     }
 
     fun setDanmakuEnabled(enabled: Boolean) {
@@ -1515,7 +1537,8 @@ private class NativeAdapter(
         h.countsLoaded = false
         scope.launch(Dispatchers.IO) {
             try {
-                val resp = RetrofitClient.api.getEpisodeCounts(ep.episodeId, userId)
+                val countEpisodeId = if (isPlayingBranchVideo) branchEpisodeId else ep.episodeId
+                val resp = RetrofitClient.api.getEpisodeCounts(countEpisodeId, userId)
                 val likeCnt = (resp["like_count"] as? Number)?.toInt() ?: 0
                 val commentCnt = (resp["comment_count"] as? Number)?.toInt() ?: 0
                 val liked = resp["liked"] as? Boolean ?: false
@@ -1634,7 +1657,7 @@ private class NativeAdapter(
             (rg.getChildAt(1) as ViewGroup).getChildAt(0).animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
                 (rg.getChildAt(1) as ViewGroup).getChildAt(0).animate().scaleX(1f).scaleY(1f).setDuration(120).start()
             }.start()
-            onCommentClick?.invoke(ep.episodeId)
+            onCommentClick?.invoke(if (isPlayingBranchVideo) branchEpisodeId else ep.episodeId)
         }
         // 点赞按钮（counts 加载完成后才响应，先乐观更新 UI 再发 API）
         rg.getChildAt(2).setOnClickListener {
@@ -1646,7 +1669,7 @@ private class NativeAdapter(
             h.likeIv.animate().scaleX(1.15f).scaleY(1.15f).setDuration(80).withEndAction {
                 h.likeIv.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
             }.start()
-            onLikeClick?.invoke(ep.episodeId)
+            onLikeClick?.invoke(if (isPlayingBranchVideo) branchEpisodeId else ep.episodeId)
         }
         // 分享按钮
         rg.getChildAt(3).setOnClickListener {  }
@@ -1656,16 +1679,13 @@ private class NativeAdapter(
                 // 直接用episode_num作为真实MP4文件名，北派#1本身就是63~81集，零偏移零出错
                 val localVideoUrl = "videos/${detail.id}/${ep.episodeNum}.mp4"
                 ExoPlayer.Builder(ctx)
-                    .setMediaSourceFactory(
-                        androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory)
-                    )
                     .setLoadControl(
                         DefaultLoadControl.Builder()
                             .setBufferDurationsMs(
-                                50_000,      // 最小开始播放缓冲 50ms 秒开
-                                200_000,     // 最大预缓冲 200ms
-                                2500,        // 回放缓冲 2.5s
-                                5000         // 重新加载缓冲阈值 5s
+                                30_000,      // 缓存30s后开始播放
+                                120_000,     // 最大预缓存2分钟
+                                15_000,      // 回放保留缓冲15s
+                                30_000       // 重新加载缓冲阈值30s
                             )
                             .setPrioritizeTimeOverSizeThresholds(true)
                             .build()
@@ -1723,7 +1743,9 @@ private class NativeAdapter(
                             },
                         )
                         // 立即设置媒体源+开始预加载，不等任何网络IO
-                        setMediaItem(MediaItem.fromUri(RetrofitClient.resolveMediaUrl(localVideoUrl)))
+                        val localFile = com.qingmo.app.QingmoApp.getCachedVideo(ctx.applicationContext as android.app.Application, "${detail.id}_${ep.episodeNum}.mp4")
+                        val mediaUri = if (localFile != null) localFile.toURI().toString() else RetrofitClient.resolveMediaUrl(localVideoUrl)
+                        setMediaItem(MediaItem.fromUri(mediaUri))
                         prepare()
                         if (sp > 0L) {
                             seekTo(sp)
@@ -1783,21 +1805,27 @@ private class NativeAdapter(
                     val shouldShow = isActive && activeHL != null && !isFullscreen
                     val curVis = h.emotionBtn.visibility
                     Log.d("DramaPager", "BTN: isActive=$isActive pos=$pos cur=$cur hl=${activeHL?.id} hlType=${activeHL?.highlightType} shouldShow=$shouldShow p=$p hlsSz=${hls.size}")
+                    // 分支选择高光点：隐藏按钮，防重复触发面板
+                    if (activeHL?.interactionType == "choice_panel") {
+                        h.emotionBtn.visibility = View.GONE
+                    }
                     if (shouldShow && curVis != View.VISIBLE) {
                         val iType = activeHL.interactionType
-                        if (iType == "choice_panel" && !suppressChoicePanel) {
+                        if (iType == "choice_panel" && !choicePanelTriggered) {
+                            choicePanelTriggered = true
                             onChoicePanelShow?.invoke(activeHL)
-                        } else {
+                        } else if (iType != "choice_panel") {
                             val preset = getHighlightInteractionPreset(activeHL)
                             if (activeHL.highlightType.isNotEmpty()) {
                                 h.emotionBtn.setInteractionKey(preset.interactionKey)
                             }
-                            h.emotionBtn.visibility = if (isPlayingBranchVideo) View.GONE else View.VISIBLE
+                            h.emotionBtn.visibility = if (isPlayingBranchVideo || suppressInteractionBtn) View.GONE else View.VISIBLE
                         }
                     } else if (!shouldShow && curVis != View.GONE) {
                         h.emotionBtn.visibility = View.GONE
                         XiaoMoCore.setIdle()
                         suppressChoicePanel = false
+                        choicePanelTriggered = false
                     }
                     lastP = p
                     delay(200)
@@ -1811,10 +1839,11 @@ private class NativeAdapter(
         }
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
-        h.seekBar.onSeek = { ms -> player.seekTo(ms); player.playWhenReady = true; h.danmakuView.seekTo(ms); triggeredSet.clear(); interactionDanmakuSent.clear() }
+        h.seekBar.onSeek = { ms -> player.seekTo(ms); player.playWhenReady = true; h.danmakuView.seekTo(ms); triggeredSet.clear(); interactionDanmakuSent.clear(); suppressChoicePanel = true; choicePanelTriggered = false; onChoicePanelHide?.invoke() }
         h.seekBar.setPlayer(player)
         h.seekBar.onDragChange =
             { dragging ->
+                if (dragging) { suppressChoicePanel = true; choicePanelTriggered = false; onChoicePanelHide?.invoke() }
                 val vis =
                     if (dragging ||
                         isFullscreen
@@ -2024,7 +2053,7 @@ private class NativeAdapter(
     fun releaseAll() {
         progressJobs.values.forEach { it.cancel() }
         progressJobs.clear()
-        players.values.forEach { it.release() }
+        players.values.toList().forEach { try { it.release() } catch (_: Exception) {} }
         players.clear()
     }
 
@@ -2382,26 +2411,27 @@ private fun SS(
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Surface(
+                modifier = Modifier.padding(horizontal = 60.dp),
                 shape = RoundedCornerShape(20.dp),
                 color = Background,
                 tonalElevation = 4.dp,
                 shadowElevation = 8.dp,
             ) {
                 Column(
-                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
                         "\u500D\u901F\u64AD\u653E",
                         color = OnBackground,
-                        fontSize = 18.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                     speeds.forEach { sp ->
                         val selected = abs(sp - current) < 0.01f
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (selected) Primary else Color.Transparent,
                             border = if (selected) null else BorderStroke(1.dp, Border),
                             modifier =
@@ -2410,24 +2440,24 @@ private fun SS(
                                     .clickable { onSelect(sp) },
                         ) {
                             Box(
-                                Modifier.padding(vertical = 12.dp),
+                                Modifier.padding(vertical = 8.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     "${sp}x",
                                     color = if (selected) Color.White else OnSurface,
-                                    fontSize = 16.sp,
+                                    fontSize = 14.sp,
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                 )
                             }
                         }
                         if (sp != speeds.last()) {
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(6.dp))
                     TextButton(onClick = onDismiss) {
-                        Text("\u53D6\u6D88", color = OnSurfaceVariant, fontSize = 14.sp)
+                        Text("\u53D6\u6D88", color = OnSurfaceVariant, fontSize = 13.sp)
                     }
                 }
             }
@@ -2534,11 +2564,11 @@ private fun CommentItem(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(nickname, fontSize = nameFont, fontWeight = FontWeight.Bold, color = if (isXiaomo) Color(0xFF7C4DFF) else Color(0xFF333333))
+                    Text(nickname, fontSize = nameFont, fontWeight = FontWeight.Bold, color = if (isXiaomo) GraphiteTeal else Color(0xFF333333))
                     if (isXiaomo) {
                         Spacer(Modifier.width(6.dp))
-                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF7C4DFF).copy(alpha=0.12f)) {
-                            Text("小墨 AI", fontSize = 11.sp, color = Color(0xFF7C4DFF), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=6.dp, vertical=1.dp))
+                        Surface(shape = RoundedCornerShape(4.dp), color = GraphiteTeal.copy(alpha=0.12f)) {
+                            Text("小墨 AI", fontSize = 11.sp, color = GraphiteTeal, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal=6.dp, vertical=1.dp))
                         }
                     } else if (isMine) {
                         Spacer(Modifier.width(6.dp))
@@ -2551,12 +2581,10 @@ private fun CommentItem(
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Row {
                         Text(showTime, fontSize = 12.sp, color = Color(0xFF999999))
-                        if (!isXiaomo) {
-                            Spacer(Modifier.width(12.dp))
-                            Text("回复", fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(id, nickname, true) })
-                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text("回复", fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.clickable { onReply(id, nickname, true) })
                     }
-                    Row(Modifier.clickable { onLike(id, liked) }) {
+                    Row(Modifier.clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { onLike(id, liked) }) {
                         Text(if (liked) "❤️" else "🤍", fontSize = 14.sp)
                         if (likeCount > 0) Text(" $likeCount", fontSize = 12.sp, color = if (liked) Color(0xFFE53935) else Color(0xFF999999))
                     }
@@ -2803,7 +2831,7 @@ fun XiaoMoChatSheet(
                             val c = selChar!!
                             Column(Modifier.fillMaxSize().imePadding()) {
                                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("← 角色列表", fontSize = 14.sp, color = Color(0xFF1E88E5), modifier = Modifier.clickable { selChar = null; charMsgs = emptyList() })
+                                    Text("← 角色列表", fontSize = 14.sp, color = GraphiteTeal, modifier = Modifier.clickable { selChar = null; charMsgs = emptyList() })
                                     Spacer(Modifier.weight(1f))
                                     Text("💬 ${c["name"] ?: ""}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
                                 }
@@ -2826,7 +2854,7 @@ fun XiaoMoChatSheet(
                                         ) {
                                             // 角色头像（左侧）
                                             if (!isUser) {
-                                                Surface(shape = CircleShape, color = Color(0xFF7C4DFF), modifier = Modifier.size(32.dp)) {
+                                                Surface(shape = CircleShape, color = GraphiteTeal, modifier = Modifier.size(32.dp)) {
                                                     Box(contentAlignment = Alignment.Center) {
                                                         Text(
                                                             (c["name"] as? String ?: "?").first().uppercase(),
@@ -2889,7 +2917,7 @@ fun XiaoMoChatSheet(
                                 Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     androidx.compose.foundation.text.BasicTextField(value = charInput, onValueChange = { charInput = it }, modifier = Modifier.weight(1f).height(40.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp), textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF333333), fontSize = 14.sp), decorationBox = { ib -> Box(contentAlignment = Alignment.CenterStart) { if (charInput.isEmpty()) Text("和${c["name"]}说点什么...", color = Color(0xFFBBBBBB), fontSize = 14.sp); ib() } })
                                     Spacer(Modifier.width(8.dp))
-                                    Text("发送", color = if (charInput.isNotBlank() && !charLoading) Color(0xFF1E88E5) else Color(0xFFBBBBBB), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = charInput.isNotBlank() && !charLoading) {
+                                    Text("发送", color = if (charInput.isNotBlank() && !charLoading) GraphiteTeal else Color(0xFFBBBBBB), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable(enabled = charInput.isNotBlank() && !charLoading) {
                                         val msg = charInput.trim(); if (msg.isEmpty()) return@clickable; charMsgs = charMsgs + ("user" to msg); charInput = ""; charLoading = true
                                         scope.launch(Dispatchers.IO) {
                                             try {
@@ -2908,7 +2936,7 @@ fun XiaoMoChatSheet(
                                 items(charList.size) { idx -> val c = charList[idx]
                                     Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF8F8F8), modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable { selChar = c }) {
                                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Surface(shape = CircleShape, color = Color(0xFF7C4DFF), modifier = Modifier.size(36.dp)) { Box(contentAlignment = Alignment.Center) { androidx.compose.material3.Text((c["name"] as? String ?: "?").first().uppercase(), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold) } }
+                                            Surface(shape = CircleShape, color = GraphiteTeal, modifier = Modifier.size(36.dp)) { Box(contentAlignment = Alignment.Center) { androidx.compose.material3.Text((c["name"] as? String ?: "?").first().uppercase(), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold) } }
                                             Spacer(Modifier.width(10.dp))
                                             Column { androidx.compose.material3.Text(c["name"] as? String ?: "", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF333333)); val role = c["role"] as? String ?: ""; if (role.isNotEmpty()) androidx.compose.material3.Text(role, fontSize = 11.sp, color = Color(0xFF999999)) }
                                         }
@@ -2932,10 +2960,10 @@ fun XiaoMoChatSheet(
                             // 新增笔记按钮
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF7C4DFF).copy(alpha = 0.1f),
+                                color = GraphiteTeal.copy(alpha = 0.1f),
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onAddNote(); onDismiss() },
                             ) {
-                                Text("📝 记录此刻", fontSize = 14.sp, color = Color(0xFF7C4DFF), fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
+                                Text("📝 记录此刻", fontSize = 14.sp, color = GraphiteTeal, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                             }
                             if (noteList.isEmpty()) {
                                 Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) { Text("还没有笔记", fontSize = 14.sp, color = Color(0xFF999999)) }
@@ -2946,7 +2974,7 @@ fun XiaoMoChatSheet(
                                     Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF8F8F8), modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                                         Column(Modifier.padding(12.dp)) {
                                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                                Text("📺 ${n["drama_title"] ?: ""} · 第${n["episode_num"] ?: ""}集", fontSize = 12.sp, color = Color(0xFF7C4DFF))
+                                                Text("📺 ${n["drama_title"] ?: ""} · 第${(n["episode_num"] as? Number)?.toInt() ?: ""}集", fontSize = 12.sp, color = GraphiteTeal)
                                                 val sec = ((n["time_sec"] as? Number)?.toLong() ?: 0L)
                                                 Text("${sec / 60}:${(sec % 60).toString().padStart(2, '0')}", fontSize = 11.sp, color = Color(0xFFBBBBBB))
                                             }
@@ -3003,7 +3031,7 @@ private fun DiscussionSheet(
     var expandMap by remember(episodeId) { mutableStateOf(mutableMapOf<Int, Boolean>()) }
     val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboardCtrl = LocalSoftwareKeyboardController.current
-    var likeCounts by remember(episodeId) { mutableStateOf(mutableMapOf<Int, Int>()) }
+    var likeCounts = remember(episodeId) { mutableStateMapOf<Int, Int>() }
     var likedSet by remember(episodeId) { mutableStateOf(mutableSetOf<Int>()) }
 
     LaunchedEffect(episodeId, visible) {
@@ -3074,7 +3102,22 @@ private fun DiscussionSheet(
                         Text("还没有评论，快来抢沙发吧~", fontSize = 14.sp, color = Color(0xFF999999))
                     }
                 } else {
-                    androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f)) {
+                    val commentListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    LaunchedEffect(replyParentId) {
+                        if (replyParentId > 0 && comments.isNotEmpty()) {
+                            val targetIdx = comments.indexOfFirst {
+                                (it["id"] as? Number)?.toInt() == replyParentId
+                            }
+                            if (targetIdx >= 0) {
+                                kotlinx.coroutines.delay(300)
+                                commentListState.animateScrollToItem(
+                                    index = targetIdx,
+                                    scrollOffset = 0,
+                                )
+                            }
+                        }
+                    }
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), state = commentListState) {
                         items(comments.size) { idx ->
                             val c = comments[idx]
                             val cid = (c["id"] as? Number)?.toInt() ?: idx
@@ -3096,7 +3139,7 @@ private fun DiscussionSheet(
                                 showTime = showTime, likeCount = likeCount, liked = liked,
                                 replies = replies, isExpanded = isExpanded,
                                 isMine = commentUserId == userId,
-                                isXiaomo = commentUserId == "xiaomo_agent",
+                                isXiaomo = commentUserId == "xiaomo_bot" || commentUserId == "xiaomo_agent",
                                 repliesMine = repliesMine,
                                 likeCounts = likeCounts, likedSet = likedSet,
                                 expandMap = expandMap,
@@ -3109,8 +3152,8 @@ private fun DiscussionSheet(
                                 focusRequester.requestFocus()
                             },
                                 onLike = { likeId: Int, cur: Boolean ->
-                                    if (cur) { likeCounts[likeId] = ((likeCounts[likeId] ?: 0) - 1).coerceAtLeast(0); likedSet.remove(likeId) }
-                                    else { likeCounts[likeId] = (likeCounts[likeId] ?: 0) + 1; likedSet.add(likeId) }
+                                    if (cur) { likeCounts[likeId] = ((likeCounts[likeId] ?: 0) - 1).coerceAtLeast(0); likedSet = likedSet.toMutableSet().also { it.remove(likeId) } }
+                                    else { likeCounts[likeId] = (likeCounts[likeId] ?: 0) + 1; likedSet = likedSet.toMutableSet().also { it.add(likeId) } }
                                 },
                                 onToggleExpand = { expandId: Int ->
                                     expandMap = expandMap.toMutableMap().also { it[expandId] = !(it[expandId] == true) }

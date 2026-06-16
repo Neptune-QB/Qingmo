@@ -560,9 +560,7 @@ fun DramaListScreen(
                         externalMessages = chatMessages,
                         sessionId = selectedSessionId,
                         onLinkClick = { dramaId ->
-                            showFullChat = false
-                            showXiaoMoPage = false
-                            onDramaClick(dramaId)
+                            try { onDramaClick(dramaId) } catch (_: Exception) {}
                         },
                         onCreateSession = { firstMsg ->
                             withContext(Dispatchers.IO) {
@@ -670,7 +668,7 @@ private fun SessionList(
             }
         }
 
-        items(sessions.reversed()) { session ->
+        items(sessions) { session ->
             val id = (session["id"] as? Number)?.toInt() ?: return@items
             val title = session["title"] as? String ?: "对话"
             val updated = session["updated_at"] as? String ?: ""
