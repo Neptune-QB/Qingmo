@@ -113,6 +113,12 @@ async def agent_chat(req: AgentChatRequest):
             yield summary.encode("utf-8")
             if llm_service.is_available:
                 yield "\n\n(还想知道什么？问小墨就行~)".encode("utf-8")
+        elif intent == "story_extension":
+            drama_title = (req.context or {}).get("drama_title", "")
+            latest_eps = [str((req.context or {}).get("episode_num", "1"))]
+            result = await llm_service.story_extension(drama_title, drama_title, latest_eps)
+            yield result.encode("utf-8")
+            return
         else:
             safe_context = dict(req.context) if req.context else {}
             page_ctx_dict = _build_page_aware_context(req.page_context)

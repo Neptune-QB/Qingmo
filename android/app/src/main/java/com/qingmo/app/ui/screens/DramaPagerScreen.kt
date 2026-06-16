@@ -752,6 +752,7 @@ private fun Pager(
                                 .clickable {
                                     showAigcEndPanel = false
                                     val player = adapter.activePlayer
+                                    adapter.activeVh?.playIcon?.visibility = View.GONE
                                     player?.seekTo(0)
                                     player?.playWhenReady = true
                                 }
@@ -1029,7 +1030,14 @@ private class NativeAdapter(
 ) : RecyclerView.Adapter<NativeAdapter.VH>() {
     val players = mutableMapOf<Int, ExoPlayer>()
     var activePlayer: ExoPlayer? = null
-    var viewPager2: ViewPager2? = null // Reference for touch disallow during seekbar drag
+    var viewPager2: ViewPager2? = null
+    private val cacheDir by lazy {
+        java.io.File(ctx.cacheDir, "exoplayer_video_cache").apply { mkdirs() }
+    }
+    private val simpleCache by lazy { androidx.media3.datasource.cache.SimpleCache(cacheDir, androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(200L * 1024 * 1024)) }
+    private val cacheFactory by lazy { androidx.media3.datasource.cache.CacheDataSource.Factory()
+        .setCache(simpleCache)
+        .setUpstreamDataSourceFactory(androidx.media3.datasource.DefaultHttpDataSource.Factory()) }
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val progressJobs = mutableMapOf<Int, Job>()
     private val viewHolders = SparseArray<VH>()
@@ -1648,6 +1656,9 @@ private class NativeAdapter(
                 // 直接用episode_num作为真实MP4文件名，北派#1本身就是63~81集，零偏移零出错
                 val localVideoUrl = "videos/${detail.id}/${ep.episodeNum}.mp4"
                 ExoPlayer.Builder(ctx)
+                    .setMediaSourceFactory(
+                        androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory)
+                    )
                     .setLoadControl(
                         DefaultLoadControl.Builder()
                             .setBufferDurationsMs(
@@ -1781,7 +1792,7 @@ private class NativeAdapter(
                             if (activeHL.highlightType.isNotEmpty()) {
                                 h.emotionBtn.setInteractionKey(preset.interactionKey)
                             }
-                            h.emotionBtn.visibility = View.VISIBLE
+                            h.emotionBtn.visibility = if (isPlayingBranchVideo) View.GONE else View.VISIBLE
                         }
                     } else if (!shouldShow && curVis != View.GONE) {
                         h.emotionBtn.visibility = View.GONE
@@ -1800,7 +1811,7 @@ private class NativeAdapter(
         }
         val dur = ep.duration * 1000L
         h.seekBar.setProgress(if (dur > 0 && savedMs > 0) savedMs.toFloat() / dur else 0f, dur)
-        h.seekBar.onSeek = { ms -> player.seekTo(ms); player.playWhenReady = true; h.danmakuView.seekTo(ms) }
+        h.seekBar.onSeek = { ms -> player.seekTo(ms); player.playWhenReady = true; h.danmakuView.seekTo(ms); triggeredSet.clear(); interactionDanmakuSent.clear() }
         h.seekBar.setPlayer(player)
         h.seekBar.onDragChange =
             { dragging ->
