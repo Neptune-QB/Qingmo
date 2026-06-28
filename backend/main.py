@@ -58,6 +58,19 @@ app.mount("/videos", StaticFiles(directory=os.path.join(MEDIA_DIR, "videos")), n
 app.mount("/xiaomo-gifs", StaticFiles(directory=r"C:\Users\12730\Desktop\Qingmo\android\app\src\main\res\drawable\xiaomo"), name="xiaomo_gifs")
 app.mount("/thumbnails", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "thumbnails")), name="thumbnails")
 
+# 启动时异步构建向量 RAG 索引（不阻塞服务）
+import threading
+@app.on_event("startup")
+async def startup_vector_rag():
+    def _build():
+        try:
+            from app.services.llm_service import build_vector_rag_from_db
+            ok = build_vector_rag_from_db()
+            print(f"[VectorRAG] {'索引构建成功' if ok else '索引构建失败，回退到纯 SQL LIKE'}")
+        except Exception as e:
+            print(f"[VectorRAG] 启动异常: {e}")
+    threading.Thread(target=_build, daemon=True).start()
+
 # 直接在main.py注册这两个profile端点，完全避开router.py中遗留的导入冲突
 @app.get("/api/v2/user/profile")
 def direct_get_profile(user_id: str):

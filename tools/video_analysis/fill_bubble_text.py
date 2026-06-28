@@ -51,7 +51,7 @@ def main():
             prompt = f"""你是正在看短剧的真实观众，看到这个高光时刻，用一句话表达第一反应。
 高光：{title}（{hl_type}）
 {desc}
-要求：8-16字，像真人弹幕吐槽、惊讶、激动，主观感受，不说教。
+要求：8-16字，像真人弹幕吐槽、惊讶、激动，主观感受，不说教。禁止使用卧槽、我靠、妈的等粗俗词。
 只说这句话："""
             bubble = llm.chat("你是短剧观众，用一句话弹幕吐槽。", prompt, temperature=0.9, max_tokens=60)
             bubble = bubble.strip().strip('"').strip("'")

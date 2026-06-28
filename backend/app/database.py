@@ -75,30 +75,6 @@ def init_db():
             UNIQUE(user_id, episode_id)
         );
 
-        CREATE TABLE IF NOT EXISTS user_interactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            episode_id INTEGER NOT NULL,
-            highlight_id INTEGER,
-            module_id TEXT NOT NULL,
-            interaction_data TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (episode_id) REFERENCES episodes(episode_id),
-            FOREIGN KEY (highlight_id) REFERENCES drama_highlight(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_interactions_user ON user_interactions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_interactions_episode ON user_interactions(episode_id);
-
-        CREATE TABLE IF NOT EXISTS user_profiles (
-            user_id TEXT PRIMARY KEY,
-            watch_history TEXT,
-            favorite_dramas TEXT,
-            interaction_stats TEXT,
-            preferences TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
@@ -206,34 +182,6 @@ def init_db():
             FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
         );
 
-        CREATE TABLE IF NOT EXISTS highlight_votes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            highlight_id INTEGER NOT NULL UNIQUE,
-            question TEXT NOT NULL,
-            option_a TEXT NOT NULL,
-            option_b TEXT NOT NULL,
-            FOREIGN KEY (highlight_id) REFERENCES drama_highlight(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS highlight_vote_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vote_id INTEGER NOT NULL,
-            user_id TEXT NOT NULL,
-            choice TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(vote_id, user_id),
-            FOREIGN KEY (vote_id) REFERENCES highlight_votes(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS user_quiz_scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            highlight_id INTEGER NOT NULL,
-            score INTEGER NOT NULL DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, highlight_id)
-        );
-
         CREATE TABLE IF NOT EXISTS user_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
@@ -243,27 +191,6 @@ def init_db():
             time_sec REAL NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (episode_id) REFERENCES episodes(episode_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS branch_votes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            drama_id INTEGER NOT NULL UNIQUE,
-            question TEXT NOT NULL,
-            option_a TEXT NOT NULL,
-            option_b TEXT NOT NULL,
-            deadline TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (drama_id) REFERENCES dramas(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS branch_vote_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vote_id INTEGER NOT NULL,
-            user_id TEXT NOT NULL,
-            choice TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(vote_id, user_id),
-            FOREIGN KEY (vote_id) REFERENCES branch_votes(id)
         );
 
         CREATE TABLE IF NOT EXISTS user_chat_sessions (
@@ -348,14 +275,10 @@ def init_db():
             dialogue_text TEXT DEFAULT '',
             visual_summary TEXT DEFAULT '',
             emotion_tags_json TEXT DEFAULT '[]',
-            candidate_highlight_type TEXT DEFAULT NULL,
-            confidence REAL DEFAULT NULL,
-            evidence_json TEXT DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_ess_episode_time ON episode_scene_segment(episode_id, start_time_ms);
-        CREATE INDEX IF NOT EXISTS idx_ess_candidate_hl ON episode_scene_segment(candidate_highlight_type);
 
         -- episode_content_summary 每集内容整体摘要
         CREATE TABLE IF NOT EXISTS episode_content_summary (

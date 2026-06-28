@@ -35,7 +35,6 @@ class NoOpVisionProvider(VisionCaptionProvider):
         return "noop"
 
     def caption(self, image_paths: list[str]) -> list[FrameCaption]:
-        # 返回空 caption，但保留时间戳信息
         results = []
         for _path in image_paths:
             results.append(FrameCaption(
@@ -46,9 +45,9 @@ class NoOpVisionProvider(VisionCaptionProvider):
 
 
 class DoubaoVisionProvider(VisionCaptionProvider):
-    """基于豆包多模态的画面描述"""
+    """基于豆包多模态的画面描述（使用 Responses API）"""
 
-    def __init__(self, api_key: str, model: str = "doubao-vision-pro-32k"):
+    def __init__(self, api_key: str, model: str = "doubao-seed-2-0-lite-260428"):
         from openai import OpenAI
         self.client = OpenAI(api_key=api_key, base_url="https://ark.cn-beijing.volces.com/api/v3")
         self.model = model
@@ -58,36 +57,35 @@ class DoubaoVisionProvider(VisionCaptionProvider):
         return f"doubao-vision({self.model})"
 
     def caption(self, image_paths: list[str]) -> list[FrameCaption]:
-        import base64
+        import re, base64
         results = []
         for img_path in image_paths:
             try:
+                # 读取图片 → base64 编码
                 with open(img_path, "rb") as f:
                     img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-                response = self.client.chat.completions.create(
+                response = self.client.responses.create(
                     model=self.model,
-                    messages=[{
+                    input=[{
                         "role": "user",
                         "content": [
                             {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+                                "type": "input_image",
+                                "image_url": f"data:image/jpeg;base64,{img_b64}",
                             },
                             {
-                                "type": "text",
-                                "text": "请用一句话描述这个短剧画面的内容，包括人物动作、表情和场景氛围。",
+                                "type": "input_text",
+                                "text": "忽略画面中的备案号文字和观剧提示。只用一句话描述：画面中的人物在做什么、什么表情、什么场景氛围。",
                             },
                         ],
                     }],
-                    max_tokens=200,
                 )
-                caption = response.choices[0].message.content or "（解析失败）"
+                caption = response.output_text or "（解析失败）"
             except Exception as e:
                 caption = f"（画面描述失败: {e}）"
 
             # 从路径中提取时间戳
-            import re
             ts_match = re.search(r'frame_(\d+)', img_path)
             ts = int(ts_match.group(1)) if ts_match else 0
 
@@ -103,6 +101,6 @@ def create_vision_provider(provider_type: str = "noop", **kwargs) -> VisionCapti
         api_key = kwargs.get("api_key") or ""
         if not api_key:
             raise ValueError("DOUBAO_API_KEY required for doubao vision provider")
-        return DoubaoVisionProvider(api_key=api_key, model=kwargs.get("model", "doubao-vision-pro-32k"))
+        return DoubaoVisionProvider(api_key=api_key, model=kwargs.get("model", "doubao-seed-2-0-lite-260428"))
     else:
         raise ValueError(f"Unknown vision provider: {provider_type}")

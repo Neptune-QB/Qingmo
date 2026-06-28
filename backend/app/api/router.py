@@ -646,6 +646,54 @@ def post_danmaku(
     return {"ok": True, "id": new_id, "easter_egg": easter_egg}
 
 
+# ===== 弹幕接龙 LLM 端点 =====
+DANMAKU_CHAIN_PROMPT = """你正在陪用户一起看短剧。用户发了一条弹幕，你需要以小墨的身份回复一句弹幕接话。
+
+规则：
+1. 回复要短，15字以内，像真人发弹幕一样自然
+2. 语气活泼、共情，带 emoji
+3. 结合弹幕内容和剧情上下文来接话
+4. 只输出接话文字，不要任何解释、标点外的符号、换行"""
+
+
+@router.post("/danmaku/chain")
+async def danmaku_chain(body: dict = Body(...)):
+    """LLM 弹幕接龙：根据用户弹幕和剧情上下文生成小墨接话"""
+    user_text = (body.get("user_text") or "").strip()
+    context = (body.get("context") or "").strip()
+
+    if not user_text:
+        return {"reply": "说得好！"}
+
+    if not llm_service.is_available:
+        return {"reply": "确实！"}
+
+    ctx_part = f"当前剧情：{context}" if context else ""
+    prompt = f"{ctx_part}\n用户弹幕：{user_text}\n小墨接话："
+
+    try:
+        async with llm_service.client as client:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=llm_service.model,
+                    messages=[
+                        {"role": "system", "content": DANMAKU_CHAIN_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.9,
+                    max_tokens=32,
+                ),
+                timeout=4.0,
+            )
+        reply = resp.choices[0].message.content.strip()
+        # 安全截断
+        if len(reply) > 20:
+            reply = reply[:20]
+        return {"reply": reply or "确实！"}
+    except Exception:
+        return {"reply": "确实！"}
+
+
 @router.get("/danmaku/{episode_id}")
 def get_danmaku(
     episode_id: int,
@@ -1010,9 +1058,18 @@ def get_episode_comments(episode_id: int, limit: int = Query(50, ge=1, le=200), 
                     item["reply_to_nickname"] = ""
                 id_map[pid]["replies"].append(item)
             else:
-                # 父评论不存在（已删除），作为顶级评论显示，避免丢失
                 item["parent_id"] = 0
                 tops.append(item)
+
+    # 计算每条评论的总回复数（含所有子孙）
+    def count_all_replies(item: dict) -> int:
+        cnt = len(item.get("replies", []))
+        for r in item.get("replies", []):
+            cnt += count_all_replies(r)
+        return cnt
+
+    for item in tops:
+        item["total_replies"] = count_all_replies(item)
 
     return tops
 
@@ -1285,75 +1342,6 @@ async def get_highlight_bubble(highlight_id: int):
     return {"ok": True, "bubble_text": bubble}
 
 
-# ===== 剧情投票 =====
-
-@router.get("/highlights/{highlight_id}/vote")
-def get_highlight_vote(highlight_id: int, user_id: str = Query(default="")):
-    """获取高光点的投票题目+实时票数+当前用户投了什么"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM highlight_votes WHERE highlight_id = ?", (highlight_id,))
-    vote = cursor.fetchone()
-    if not vote:
-        conn.close()
-        return {"ok": True, "vote": None}
-
-    cursor.execute("SELECT choice, COUNT(*) as cnt FROM highlight_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
-    counts = {"a": 0, "b": 0}
-    for r in cursor.fetchall():
-        counts[r["choice"]] = r["cnt"]
-
-    my_choice = None
-    if user_id:
-        uid = user_id
-        cursor.execute("SELECT choice FROM highlight_vote_records WHERE vote_id = ? AND user_id = ?", (vote["id"], uid))
-        rec = cursor.fetchone()
-        if rec:
-            my_choice = rec["choice"]
-    conn.close()
-
-    return {
-        "ok": True,
-        "vote": {
-            "id": vote["id"],
-            "highlight_id": vote["highlight_id"],
-            "question": vote["question"],
-            "option_a": vote["option_a"],
-            "option_b": vote["option_b"],
-            "counts": counts,
-            "my_choice": my_choice,
-        }
-    }
-
-
-@router.post("/highlights/{highlight_id}/vote")
-def cast_highlight_vote(highlight_id: int, user_id: str = Body(...), choice: str = Body(...)):
-    """投一票（a 或 b），每人每投票仅一票"""
-    if choice not in ("a", "b"):
-        raise HTTPException(status_code=400, detail="choice 只能是 a 或 b")
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM highlight_votes WHERE highlight_id = ?", (highlight_id,))
-    vote = cursor.fetchone()
-    if not vote:
-        conn.close()
-        raise HTTPException(status_code=404, detail="该高光点没有投票")
-
-    uid = user_id
-    cursor.execute(
-        "INSERT OR REPLACE INTO highlight_vote_records (vote_id, user_id, choice) VALUES (?,?,?)",
-        (vote["id"], uid, choice),
-    )
-    conn.commit()
-
-    cursor.execute("SELECT choice, COUNT(*) as cnt FROM highlight_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
-    counts = {"a": 0, "b": 0}
-    for r in cursor.fetchall():
-        counts[r["choice"]] = r["cnt"]
-    conn.close()
-    return {"ok": True, "counts": counts}
-
-
 # ===== 用户互动上报 =====
 
 @router.post("/interactions")
@@ -1582,98 +1570,6 @@ def delete_note(note_id: int, user_id: str = Query(...)):
     if deleted == 0:
         raise HTTPException(status_code=404, detail="笔记不存在")
     return {"ok": True}
-
-
-# ===== 剧情分支投票 =====
-
-@router.get("/dramas/{drama_id}/branch-vote")
-def get_branch_vote(drama_id: int, user_id: str = Query(default="")):
-    """获取剧集的分支投票题目+实时票数"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM branch_votes WHERE drama_id = ?", (drama_id,))
-    vote = cursor.fetchone()
-    if not vote:
-        conn.close()
-        return {"ok": True, "vote": None}
-
-    cursor.execute("SELECT choice, COUNT(*) as cnt FROM branch_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
-    counts = {"a": 0, "b": 0}
-    for r in cursor.fetchall():
-        counts[r["choice"]] = r["cnt"]
-    total = counts["a"] + counts["b"]
-
-    my_choice = None
-    if user_id:
-        uid = user_id
-        cursor.execute("SELECT choice FROM branch_vote_records WHERE vote_id = ? AND user_id = ?", (vote["id"], uid))
-        rec = cursor.fetchone()
-        if rec:
-            my_choice = rec["choice"]
-    conn.close()
-
-    # 检查是否过期
-    from datetime import datetime
-    expired = False
-    if vote["deadline"]:
-        try:
-            expired = datetime.now() > datetime.fromisoformat(vote["deadline"])
-        except Exception:
-            pass
-
-    return {
-        "ok": True,
-        "vote": {
-            "id": vote["id"],
-            "drama_id": vote["drama_id"],
-            "question": vote["question"],
-            "option_a": vote["option_a"],
-            "option_b": vote["option_b"],
-            "deadline": vote["deadline"],
-            "expired": expired,
-            "total": total,
-            "counts": counts,
-            "my_choice": my_choice,
-        },
-    }
-
-
-@router.post("/dramas/{drama_id}/branch-vote")
-def cast_branch_vote(drama_id: int, user_id: str = Body(...), choice: str = Body(...)):
-    """对分支投票进行投票"""
-    if choice not in ("a", "b"):
-        raise HTTPException(status_code=400, detail="choice 只能是 a 或 b")
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, deadline FROM branch_votes WHERE drama_id = ?", (drama_id,))
-    vote = cursor.fetchone()
-    if not vote:
-        conn.close()
-        raise HTTPException(status_code=404, detail="该剧集没有分支投票")
-
-    # 检查是否过期
-    from datetime import datetime
-    if vote["deadline"]:
-        try:
-            if datetime.now() > datetime.fromisoformat(vote["deadline"]):
-                conn.close()
-                return {"ok": False, "error": "投票已截止"}
-        except Exception:
-            pass
-
-    uid = user_id
-    cursor.execute(
-        "INSERT OR REPLACE INTO branch_vote_records (vote_id, user_id, choice) VALUES (?,?,?)",
-        (vote["id"], uid, choice),
-    )
-    conn.commit()
-
-    cursor.execute("SELECT choice, COUNT(*) as cnt FROM branch_vote_records WHERE vote_id = ? GROUP BY choice", (vote["id"],))
-    counts = {"a": 0, "b": 0}
-    for r in cursor.fetchall():
-        counts[r["choice"]] = r["cnt"]
-    conn.close()
-    return {"ok": True, "counts": counts}
 
 
 # ===== 小墨 GIF 动效接口 =====

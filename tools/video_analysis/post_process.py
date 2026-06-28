@@ -230,6 +230,7 @@ def remove_dense(
     min_gap_ms: int = 20000,
     same_type_min_gap_ms: int = 45000,
     video_duration_ms: int = 0,
+    min_start_ms: int = 5000,
 ) -> list[dict]:
     """删除过密高光点"""
     if not candidates:
@@ -237,6 +238,9 @@ def remove_dense(
 
     # 按 start_time_ms 升序
     candidates.sort(key=lambda x: x["start_time_ms"])
+
+    # 过滤开头高光：防止播放开始立即弹出互动面板
+    candidates = [c for c in candidates if c["start_time_ms"] >= min_start_ms]
 
     # 同类型最小间隔过滤
     filtered = []
@@ -291,6 +295,7 @@ def post_process_highlights(
     max_per_episode: int = 8,
     min_gap_ms: int = 20000,
     same_type_min_gap_ms: int = 45000,
+    min_start_ms: int = 5000,
 ) -> list[dict]:
     """高光点后处理总入口"""
     processed = []
@@ -333,6 +338,7 @@ def post_process_highlights(
         max_per_episode=max_per_episode,
         min_gap_ms=min_gap_ms,
         same_type_min_gap_ms=same_type_min_gap_ms,
+        min_start_ms=min_start_ms,
         video_duration_ms=video_duration_ms,
     )
 

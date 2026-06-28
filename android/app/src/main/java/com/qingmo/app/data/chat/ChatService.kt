@@ -127,7 +127,35 @@ object ChatService {
         }
     }
 
-    /** 用 AI 总结首条消息为10字以内标题 */
+    /** 弹幕接龙：调 LLM 生成小墨接话，失败返回 null */
+    suspend fun danmakuChain(userText: String, context: String = ""): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("user_text", userText)
+                    put("context", context)
+                }
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("${RetrofitClient.BASE_URL}api/v1/danmaku/chain")
+                    .post(body)
+                    .build()
+
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val responseBody = response.body?.string() ?: return@withContext null
+                response.close()
+                val result = JSONObject(responseBody)
+                result.optString("reply", null)?.takeIf { it != "确实！" }
+            } catch (_: Exception) {
+                null  // 超时或网络错误，静默回退到模板
+            }
+        }
+    }
     suspend fun summarizeTitle(firstMessage: String): String {
         return withContext(Dispatchers.IO) {
             try {

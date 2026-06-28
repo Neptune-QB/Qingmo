@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -43,7 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "backend"
 
 from tools.video_analysis.providers.asr import create_asr_provider, AsrProvider
 from tools.video_analysis.providers.vision import create_vision_provider, VisionCaptionProvider
-from tools.video_analysis.providers.llm import LLMProvider
+from tools.video_analysis.providers.llm import LLMProvider, _parse_json
 from tools.video_analysis.prompts import (
     HIGHLIGHT_ANALYSIS_PROMPT,
     SCENE_SUMMARY_PROMPT,
@@ -379,6 +380,75 @@ def generate_episode_summary(transcripts: list[dict], scene_summaries: list[dict
     }
 
 
+def _build_drama_context(drama_id: int) -> str:
+    """从数据库提取剧情背景信息用于 ASR 纠错"""
+    try:
+        # 尝试多个可能的 DB 路径
+        db_paths = [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend", "ju_flash.db"),
+            os.path.join(os.getcwd(), "backend", "ju_flash.db"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "backend", "ju_flash.db"),
+        ]
+        db_path = ""
+        for p in db_paths:
+            if os.path.exists(p):
+                db_path = p
+                break
+        if not db_path:
+            return ""
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT title, description, tags FROM dramas WHERE id=?", (drama_id,))
+        drama = cur.fetchone()
+        if not drama:
+            conn.close()
+            return ""
+        parts = [f"剧名：{drama[0]}", f"简介：{drama[1]}"]
+        cur.execute("SELECT name, role FROM drama_characters WHERE drama_id=?", (drama_id,))
+        chars = cur.fetchall()
+        if chars:
+            parts.append("角色：" + "、".join(f"{n}({r})" for n, r in chars))
+            # 同时返回角色名列表用于后处理强制替换
+            _CHARACTER_NAMES.clear()
+            _CHARACTER_NAMES.extend(c[0] for c in chars)
+        conn.close()
+        return "\n".join(parts)
+    except Exception as e:
+        log.warning(f"  _build_drama_context 失败: {e}")
+        return ""
+
+
+# 从数据库动态加载的角色名列表（用于纠错 prompt 注入和预替换）
+_CHARACTER_NAMES: list[str] = []
+
+# 角色名同音字强制替换（纠错前预处理）
+_HOMOPHONE_FIX_MAP = {
+    "向云峰": "项云峰", "相云峰": "项云峰", "像云峰": "项云峰", "项云锋": "项云峰",
+    "向爷": "项爷", "相爷": "项爷", "像爷": "项爷",
+    "于峰": "于枫", "余枫": "于枫",
+    "李靖": "李静", "李净": "李静", "李敬": "李静",
+    "李大权": "李大全", "李大泉": "李大全", "李达全": "李大全",
+}
+
+
+def _pre_fix_character_names(transcripts: list[dict], drama_id: int) -> int:
+    """暴力替换已知角色名同音别字（直接从固定映射表）"""
+    fixes = 0
+    for t in transcripts:
+        orig = t["text"]
+        fixed = orig
+        for wrong, right in _HOMOPHONE_FIX_MAP.items():
+            if wrong in fixed:
+                fixed = fixed.replace(wrong, right)
+        if fixed != orig:
+            t["text"] = fixed
+            fixes += 1
+    if fixes:
+        import logging
+        logging.getLogger(__name__).info(f"  角色名预修正: {fixes} 处")
+    return fixes
+
+
 def main():
     parser = argparse.ArgumentParser(description="短剧 MP4 自动分析脚本")
     parser.add_argument("--episode-id", type=int, required=True, help="剧集 ID")
@@ -389,7 +459,7 @@ def main():
     parser.add_argument("--window-overlap-seconds", type=float, default=2, help="窗口重叠（默认 2）")
     parser.add_argument("--min-confidence", type=float, default=0.70, help="最低置信度（默认 0.70）")
     parser.add_argument("--max-highlights-per-minute", type=int, default=1, help="每分钟最多高光点（默认 1）")
-    parser.add_argument("--max-highlights-per-episode", type=int, default=3, help="每集最多高光点（默认 3）")
+    parser.add_argument("--max-highlights-per-episode", type=int, default=2, help="每集最多高光点（默认 2）")
     parser.add_argument("--min-gap-between-highlights-ms", type=int, default=20000, help="高光点最小间隔（默认 20000ms）")
     parser.add_argument("--same-type-min-gap-ms", type=int, default=45000, help="同类型高光点最小间隔（默认 45000ms）")
     parser.add_argument("--dry-run", action="store_true", help="只输出 JSON，不写数据库")
@@ -399,6 +469,11 @@ def main():
     parser.add_argument("--skip-asr", action="store_true", help="跳过 ASR（使用空台词）")
     parser.add_argument("--skip-frames", action="store_true", help="跳过抽帧")
     parser.add_argument("--asr-provider", type=str, default="faster_whisper", help="ASR Provider 类型")
+    parser.add_argument("--model-size", type=str, default="small", help="faster-whisper 模型大小 (small/medium/large-v3)")
+    parser.add_argument("--device", type=str, default="cpu", help="推理设备 (cpu/cuda)")
+    parser.add_argument("--diarize", action="store_true", help="启用说话人分离（需要 HF_TOKEN 环境变量和 pyannote）")
+    parser.add_argument("--correct-asr", action="store_true", help="LLM 后纠错 ASR 台词（需要配置 LLM_PROVIDER）")
+    parser.add_argument("--correction-provider", type=str, default=None, help="纠错用的 LLM 后端 (deepseek/doubao，默认读取 LLM_PROVIDER)")
     parser.add_argument("--vision-provider", type=str, default="noop", help="视觉 Provider 类型")
 
     args = parser.parse_args()
@@ -473,7 +548,7 @@ def main():
             if audio_path:
                 try:
                     log.info("ASR: 开始语音识别...")
-                    asr = create_asr_provider(args.asr_provider)
+                    asr = create_asr_provider(args.asr_provider, model_size=args.model_size, device=args.device, diarize=args.diarize)
                     asr_result = asr.transcribe(audio_path)
                     for item in asr_result:
                         transcripts.append({
@@ -492,6 +567,42 @@ def main():
                     log.error(f"  ASR 失败: {e}")
         report["transcripts"] = transcripts
 
+        # ========== 2b. LLM 后纠错 ASR ==========
+        if args.correct_asr and transcripts:
+            try:
+                from tools.video_analysis.providers.llm import build_asr_correction_user_prompt, ASR_CORRECTION_SYSTEM_PROMPT
+                correction_provider = args.correction_provider or os.getenv("LLM_PROVIDER", "deepseek")
+                corr_llm = LLMProvider(provider=correction_provider)
+                if corr_llm.is_available:
+                    log.info(f"ASR 纠错: 使用 {correction_provider} 校对 {len(transcripts)} 句台词...")
+                    # 注入剧情上下文（剧名+简介+角色名单）
+                    drama_context = _build_drama_context(drama_id)
+                    # 先暴力替换角色名同音字，再送 LLM 精修
+                    _pre_fix_character_names(transcripts, drama_id)
+                    user_prompt = build_asr_correction_user_prompt(transcripts, drama_context)
+                    raw = corr_llm.chat(ASR_CORRECTION_SYSTEM_PROMPT, user_prompt, temperature=0.1, max_tokens=4096)
+                    corrected = _parse_json(raw)
+                    if corrected and isinstance(corrected, list):
+                        # 按原文匹配替换
+                        fix_count = 0
+                        for item in corrected:
+                            orig = item.get("original", "")
+                            new_text = item.get("corrected", "")
+                            if orig and new_text and orig != new_text:
+                                for t in transcripts:
+                                    if t["text"] == orig:
+                                        t["text"] = new_text
+                                        fix_count += 1
+                                        break
+                        log.info(f"  纠错完成: {fix_count}/{len(transcripts)} 句被修正")
+                    else:
+                        log.warning("  LLM 纠错返回格式异常，跳过")
+                else:
+                    log.warning(f"  纠错 LLM ({correction_provider}) 不可用，跳过")
+            except Exception as e:
+                log.warning(f"  ASR 纠错失败: {e}，使用原始台词继续")
+                import traceback; traceback.print_exc()
+
         # ========== 3. 抽关键帧 ==========
         frames = []
         if not args.skip_frames:
@@ -502,7 +613,10 @@ def main():
             if frames:
                 vision = None
                 try:
-                    vision = create_vision_provider(args.vision_provider)
+                    vision = create_vision_provider(
+                        args.vision_provider,
+                        api_key=os.getenv("DOUBAO_API_KEY", ""),
+                    )
                 except Exception as e:
                     log.warning(f"  视觉 Provider 不可用: {e}")
 
@@ -526,7 +640,7 @@ def main():
         # ========== 5-9. LLM 分析 ==========
         llm = LLMProvider()
         if not llm.is_available:
-            raise RuntimeError("LLM 不可用，请配置 DOUBAO_API_KEY 和 DOUBAO_EP_ID")
+            raise RuntimeError(f"LLM 不可用，请配置 LLM_PROVIDER 对应的 API_KEY（当前: {llm.provider}）")
 
         scene_segments = []
         highlight_candidates = []
@@ -604,7 +718,7 @@ def main():
                 try:
                     bubble_prompt = f"""你是正在看短剧的真实观众，看到这个高光时刻，用一句话表达第一反应。
 高光：{h['title']}（{h['highlight_type']}）
-要求：8-16字，像真人弹幕吐槽、惊讶、激动，主观感受，不说教。
+要求：8-16字，像真人弹幕吐槽、惊讶、激动，主观感受，不说教。禁止使用卧槽、我靠、妈的等粗俗词。
 只说这句话："""
                     bubble_text = llm.chat("你是短剧观众，用一句话弹幕吐槽。", bubble_prompt, temperature=0.9, max_tokens=60)
                     bubble_text = bubble_text.strip().strip('"').strip("'")
@@ -635,9 +749,6 @@ def main():
                     "dialogue_text": s.get("dialogue_text", ""),
                     "visual_summary": s.get("visual_summary", ""),
                     "emotion_tags": s.get("emotion_tags", []),
-                    "candidate_highlight_type": None,
-                    "confidence": None,
-                    "evidence": None,
                 })
             write_scene_segments(args.episode_id, drama_id, formatted_segments)
             log.info(f"  已写入 {len(formatted_segments)} 个剧情片段")

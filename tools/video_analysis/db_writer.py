@@ -77,6 +77,8 @@ def clear_previous_analysis(episode_id: int):
 def write_transcripts(episode_id: int, drama_id: int, transcripts: list[dict]):
     conn = get_connection()
     cur = conn.cursor()
+    # 写入前先删旧 ASR 台词，防止重复堆积
+    cur.execute("DELETE FROM episode_transcript WHERE episode_id = ? AND source_type = 'asr'", (episode_id,))
     now = datetime.now().isoformat()
     for t in transcripts:
         cur.execute(
@@ -98,8 +100,8 @@ def write_scene_segments(episode_id: int, drama_id: int, segments: list[dict]):
         cur.execute(
             """INSERT INTO episode_scene_segment
                (drama_id, episode_id, start_time_ms, end_time_ms, summary, dialogue_text, visual_summary,
-                emotion_tags_json, candidate_highlight_type, confidence, evidence_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                emotion_tags_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 drama_id, episode_id,
                 s["start_time_ms"], s["end_time_ms"],
@@ -107,9 +109,6 @@ def write_scene_segments(episode_id: int, drama_id: int, segments: list[dict]):
                 s.get("dialogue_text", ""),
                 s.get("visual_summary", ""),
                 json.dumps(s.get("emotion_tags", []), ensure_ascii=False),
-                s.get("candidate_highlight_type"),
-                s.get("confidence"),
-                json.dumps(s.get("evidence", {}), ensure_ascii=False) if s.get("evidence") else None,
                 now, now,
             ),
         )

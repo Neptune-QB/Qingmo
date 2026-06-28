@@ -112,7 +112,13 @@ class LLMService:
         extra = ""
         if isinstance(drama_context, dict):
             extra = drama_context.pop("_rag_context", "")
-        full_rag = "\n\n".join(x for x in [local_plot, extra] if x.strip())
+        # 向量检索补充
+        vec_rag = ""
+        if vector_rag.ready:
+            vec_results = vector_rag.search(user_message, top_k=5)
+            if vec_results:
+                vec_rag = "【语义关联知识】\n" + "\n".join(f"  - {r}" for r in vec_results)
+        full_rag = "\n\n".join(x for x in [local_plot, vec_rag, extra] if x.strip())
         if full_rag:
             messages.append({"role": "system", "content": f"⚠️ 必须完全基于以下本地真实数据库已存储的剧情内容回答用户提问，绝对不允许编造任何不在下面内容里的虚构剧情！\n{full_rag}"})
 
@@ -475,28 +481,6 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
                     lines.append(f"  第{ev['episode_num']}集@{ev['time_sec']}s [{ev['event_type']}] {ev['event_desc']}（角色: {ev['characters']}）")
                 parts.append("\n".join(lines))
 
-        # 3. 弹幕检索
-        danmaku_conditions = []
-        danmaku_params = []
-        for kw in keywords:
-            danmaku_conditions.append("text LIKE ?")
-            danmaku_params.append(f"%{kw}%")
-        if danmaku_conditions:
-            sql = """
-                SELECT d.text, d.time_sec, e.episode_num
-                FROM danmaku d
-                JOIN episodes e ON d.episode_id = e.episode_id
-                WHERE e.drama_id = ? AND (""" + " OR ".join(danmaku_conditions) + """)
-                ORDER BY d.time_sec LIMIT 10
-            """
-            cursor.execute(sql, [drama_id] + danmaku_params)
-            danmakus = cursor.fetchall()
-            if danmakus:
-                lines = ["【观众弹幕热议】"]
-                for dm in danmakus:
-                    lines.append(f"  第{dm['episode_num']}集@{dm['time_sec']:.1f}s: {dm['text']}")
-                parts.append("\n".join(lines))
-
         # 4. 高光点检索
         hl_conditions = []
         hl_params = []
@@ -607,3 +591,91 @@ def retrieve_plot_context(user_message: str, drama_context: Optional[dict] = Non
 
     conn.close()
     return "\n\n".join(parts) if parts else ""
+
+
+# ===== 向量 RAG =====
+class VectorRAG:
+    """FAISS + fastembed 向量检索，与 SQL LIKE 互补"""
+
+    def __init__(self):
+        self._embedder = None
+        self._index = None
+        self._texts: list[str] = []
+        self._ready = False
+
+    @property
+    def ready(self) -> bool:
+        return self._ready and self._index is not None
+
+    def build(self, docs: list[dict]) -> bool:
+        """从知识文档构建 FAISS 索引"""
+        if not docs:
+            return False
+        try:
+            from fastembed import TextEmbedding
+            import faiss, numpy as np
+
+            self._embedder = TextEmbedding(model_name="BAAI/bge-small-zh-v1.5", max_length=512)
+            self._texts = [d["text"] for d in docs if d.get("text", "").strip()]
+            embs = np.array(list(self._embedder.embed(self._texts, batch_size=32)))
+            self._index = faiss.IndexFlatIP(embs.shape[1])
+            faiss.normalize_L2(embs)
+            self._index.add(embs)
+            self._ready = True
+            return True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"VectorRAG build failed: {e}")
+            return False
+
+    def search(self, query: str, top_k: int = 10) -> list[str]:
+        if not self.ready:
+            return []
+        try:
+            import faiss, numpy as np
+            q = np.array(list(self._embedder.embed([query])))
+            faiss.normalize_L2(q)
+            _, ids = self._index.search(q, min(top_k, len(self._texts)))
+            return [self._texts[i][:120] for i in ids[0] if i < len(self._texts)]
+        except Exception:
+            return []
+
+
+# 全局单例
+vector_rag = VectorRAG()
+
+
+def build_vector_rag_from_db() -> bool:
+    """从数据库加载知识文档，构建向量索引"""
+    import sqlite3, json, os
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "ju_flash.db")
+    if not os.path.exists(db_path):
+        db_path = os.path.join(os.getcwd(), "backend", "ju_flash.db")
+    if not os.path.exists(db_path):
+        return False
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    docs = []
+
+    cur.execute("SELECT name,role,description,drama_id FROM drama_characters")
+    for r in cur.fetchall():
+        docs.append({"id": f"char_{r['name']}", "type": "角色", "text": f"{r['name']}（{r['role']}）：{r['description']}"})
+
+    cur.execute("SELECT time_sec,event_type,event_desc FROM drama_timeline")
+    for r in cur.fetchall():
+        docs.append({"id": f"tl_{r['time_sec']}", "type": "事件", "text": f"@{r['time_sec']}s [{r['event_type']}] {r['event_desc']}"})
+
+    cur.execute("SELECT h.title,h.description,h.highlight_type,h.episode_id FROM drama_highlight h WHERE h.status='draft'")
+    for r in cur.fetchall():
+        docs.append({"id": f"hl_{r['highlight_type']}_{r['episode_id']}", "type": "高光", "text": f"[{r['highlight_type']}] {r['title']}：{r['description']}"})
+
+    cur.execute("SELECT ecs.episode_id,COALESCE(ecs.short_summary,'') as s FROM episode_content_summary ecs")
+    for r in cur.fetchall():
+        if r['s']:
+            docs.append({"id": f"s_{r['episode_id']}", "type": "摘要", "text": r['s']})
+
+    # 弹幕不纳入向量库——噪音大、纯表情多，语义检索价值低
+    conn.close()
+    return vector_rag.build(docs)

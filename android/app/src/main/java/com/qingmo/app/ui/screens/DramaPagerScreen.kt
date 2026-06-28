@@ -2507,6 +2507,8 @@ private fun CommentItem(
     onReply: (targetCommentId: Int, targetNickname: String, isTopLevelTarget: Boolean) -> Unit,
     onLike: (Int, Boolean) -> Unit,
     onToggleExpand: (Int) -> Unit,
+    userId: String,
+    totalReplies: Int = 0,
 ) {
     val avatarSize = 40.dp
     val avatarFont = 16.sp
@@ -2592,7 +2594,8 @@ private fun CommentItem(
             }
         }
 
-        val btnText = if (isExpanded) "收起回复" else "展开${replies.size}条回复"
+        val totalCount = if (totalReplies > 0) totalReplies else replies.size
+        val btnText = if (isExpanded) "收起回复" else "展开${totalCount}条回复"
 
         if (!isExpanded && replies.isNotEmpty()) {
             Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 4.dp, start = (avatarSize + 10.dp)).clickable { onToggleExpand(id) })
@@ -2602,7 +2605,7 @@ private fun CommentItem(
         if (isExpanded && replies.isNotEmpty()) {
             Column(Modifier.fillMaxWidth().padding(start = (avatarSize + 10.dp))) {
                 replies.forEachIndexed { idx, reply ->
-                    ReplyItem(reply, idx, repliesMine, likeCounts, likedSet, onReply, onLike)
+                    ReplyItem(reply, idx, repliesMine, likeCounts, likedSet, onReply, onLike, userId)
                 }
                 // 收起回复按钮放在所有子回复的最后面，仅渲染一次
                 Text(btnText, fontSize = 12.sp, color = Color(0xFF1A535C), modifier = Modifier.padding(top = 6.dp).clickable { onToggleExpand(id) })
@@ -2620,16 +2623,18 @@ private fun ReplyItem(
     likedSet: Set<Int>,
     onReply: (Int, String, Boolean) -> Unit,
     onLike: (Int, Boolean) -> Unit,
+    userId: String = "",
 ) {
     val rId = (reply["id"] as? Number)?.toInt() ?: 0
     val rNick = reply["nickname"] as? String ?: "热心网友"
+    val rUserId = reply["user_id"] as? String ?: ""
     val rText = reply["text"] as? String ?: ""
     val rReplyToUserName = reply["reply_to_nickname"] as? String ?: ""
     val rCreated = reply["created_at"] as? String ?: ""
     val rTime = if (rCreated.length >= 5) rCreated.substring(5, 10) else rCreated
     val rLike = likeCounts[rId] ?: 0
     val rLiked = rId in likedSet
-    val rIsMine = if (idx < repliesMine.size) repliesMine[idx] else false
+    val rIsMine = rUserId.isNotEmpty() && rUserId == userId
     val rSubReplies = (reply["replies"] as? List<*>)?.filterIsInstance<Map<String, Any>>() ?: emptyList()
 
     Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp)) {
@@ -2709,7 +2714,7 @@ private fun ReplyItem(
         if (rSubReplies.isNotEmpty()) {
             Column(Modifier.fillMaxWidth()) {
                 rSubReplies.forEachIndexed { subIdx, subReply ->
-                    ReplyItem(subReply, subIdx, emptyList(), likeCounts, likedSet, onReply, onLike)
+                    ReplyItem(subReply, subIdx, emptyList(), likeCounts, likedSet, onReply, onLike, userId)
                 }
             }
         }
@@ -3158,6 +3163,8 @@ private fun DiscussionSheet(
                                 onToggleExpand = { expandId: Int ->
                                     expandMap = expandMap.toMutableMap().also { it[expandId] = !(it[expandId] == true) }
                                 },
+                                userId = userId,
+                                totalReplies = (c["total_replies"] as? Number)?.toInt() ?: 0,
                             )
                             // 分割线
                             if (idx != comments.size - 1) {
