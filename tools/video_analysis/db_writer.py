@@ -228,3 +228,38 @@ def verify_xiaomo_gif_table() -> bool:
     count = cur.fetchone()["cnt"]
     conn.close()
     return count >= 10
+
+
+def generate_xiaomo_comment(
+    episode_id: int,
+    drama_title: str,
+    episode_num: int,
+    short_summary: str,
+    llm_chat_fn,
+) -> bool:
+    """用 LLM 生成小墨内置评论并写入 episode_comments 表"""
+    if not short_summary or len(short_summary) < 10:
+        return False
+
+    prompt = (
+        f"你是小墨，青墨短剧平台AI观剧助手。"
+        f"你刚看完《{drama_title}》第{episode_num}集，发一条15-30字的短评，语气活泼可爱，带表情符号。"
+    )
+    try:
+        comment = llm_chat_fn(prompt, f"剧情：{short_summary[:400]}", temperature=0.9, max_tokens=80)
+        comment = comment.strip().strip('"').strip("'")
+        if len(comment) < 5:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+        cur.execute(
+            "INSERT INTO episode_comments (episode_id, user_id, nickname, text, created_at) VALUES (?, 'xiaomo_bot', '小墨', ?, ?)",
+            (episode_id, comment, now),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False

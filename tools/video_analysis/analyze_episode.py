@@ -60,6 +60,7 @@ from tools.video_analysis.db_writer import (
     write_scene_segments,
     write_episode_summary,
     write_highlights,
+    generate_xiaomo_comment,
     verify_xiaomo_gif_table,
 )
 
@@ -497,7 +498,9 @@ def main():
         log.error(f"episode_id={args.episode_id} 不存在于数据库")
         sys.exit(1)
     drama_id = args.drama_id or ep_info["drama_id"]
-    log.info(f"剧集: drama_id={drama_id}, episode_id={args.episode_id}, drama={ep_info.get('drama_title', '?')}")
+    drama_title = ep_info.get("drama_title", "")
+    episode_num = ep_info.get("episode_num", 0)
+    log.info(f"剧集: drama_id={drama_id}, episode_id={args.episode_id}, drama={drama_title}")
 
     # 工作目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -758,6 +761,12 @@ def main():
 
             write_highlights(args.episode_id, drama_id, highlights)
             log.info(f"  已写入 {len(highlights)} 个高光点 (status=draft)")
+
+            # 自动生成小墨内置评论
+            summ = episode_summary.get("short_summary", "") or episode_summary.get("long_summary", "")
+            ok = generate_xiaomo_comment(args.episode_id, drama_title, episode_num, summ, llm.chat)
+            if ok:
+                log.info("  已生成小墨内置评论")
 
         # 更新 segments 到报告
         for s in scene_segments:
