@@ -209,3 +209,65 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 | `users` | 用户认证 |
 
 共 21 张表。
+
+---
+
+## 剧情分析流水线
+
+自动从 MP4 视频提取台词、画面描述、高光点和每集摘要，写入数据库供小墨 RAG 检索。
+
+### 流程
+
+```
+MP4 → ffmpeg抽音频 → ASR语音识别 → 角色名修正
+    → ffmpeg抽帧(每5s) → 多模态画面描述
+    → 10s滑动窗口(2s重叠) → LLM逐窗口分析
+    → 后处理(去重/密度控制) → 高光点+摘要+气泡 → SQLite
+```
+
+### 单集分析
+
+```bash
+python -m tools.video_analysis.analyze_episode \
+  --episode-id 1064 \
+  --video-path backend/crawler/data/videos/1/64.mp4 \
+  --asr-provider funasr --device cuda \
+  --correct-asr \
+  --vision-provider doubao \
+  --force --save
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--episode-id` | 剧集 ID |
+| `--video-path` | MP4 文件路径 |
+| `--asr-provider` | funasr / whisper |
+| `--correct-asr` | 启用 LLM 后纠错 |
+| `--vision-provider` | doubao / noop |
+| `--force` | 覆盖旧分析数据 |
+| `--save` | 写入数据库 |
+| `--max-highlights-per-episode` | 每集最多高光点（默认 2） |
+
+### 批量分析
+
+```bash
+python -m tools.video_analysis.batch_analyze --save --drama-id 1
+```
+
+支持断点续传，单集失败不阻塞其余。
+
+### 目录结构
+
+```text
+tools/video_analysis/
+├── analyze_episode.py    # 单集入口
+├── batch_analyze.py      # 批量入口
+├── providers/
+│   ├── asr.py            # FunASR + faster-whisper
+│   ├── vision.py         # 多模态画面描述
+│   └── llm.py            # LLM 调用
+├── prompts.py            # System Prompt 模板
+├── post_process.py       # 高光后处理
+├── db_writer.py          # 数据库写入
+└── fill_bubble_text.py   # 气泡文案生成
+```
