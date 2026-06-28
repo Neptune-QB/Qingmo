@@ -83,10 +83,10 @@ def write_transcripts(episode_id: int, drama_id: int, transcripts: list[dict]):
     for t in transcripts:
         cur.execute(
             """INSERT INTO episode_transcript
-               (drama_id, episode_id, start_time_ms, end_time_ms, speaker, text, confidence, source_type, language, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'asr', 'zh', ?, ?)""",
+               (drama_id, episode_id, start_time_ms, end_time_ms, speaker, text, source_type, language, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'asr', 'zh', ?, ?)""",
             (drama_id, episode_id, t["start_time_ms"], t["end_time_ms"],
-             t.get("speaker", ""), t["text"], t.get("confidence"), now, now),
+             t.get("speaker", ""), t["text"], now, now),
         )
     conn.commit()
     conn.close()

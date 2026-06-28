@@ -255,7 +255,6 @@ def init_db():
             end_time_ms INTEGER NOT NULL,
             speaker TEXT DEFAULT '',
             text TEXT NOT NULL,
-            confidence REAL DEFAULT NULL,
             source_type TEXT NOT NULL DEFAULT 'asr',
             language TEXT DEFAULT 'zh',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
